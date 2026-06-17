@@ -67,6 +67,9 @@ void Machine::injectKey(const std::string &key, bool pressed) {
 }
 
 void Machine::injectKeyBytes(const std::vector<uint8_t> &bytes) {
+  if (input_observer_ != nullptr) {
+    for (uint8_t byte : bytes) input_observer_->onKeyScancode(byte);
+  }
   i8042_.injectKeySequence(bytes);
   if (trace_ != nullptr && pendingIrqs() != 0) {
     trace_->log("input", "keyboard");
@@ -74,6 +77,9 @@ void Machine::injectKeyBytes(const std::vector<uint8_t> &bytes) {
 }
 
 void Machine::injectMouse(int dx, int dy, uint8_t buttons) {
+  if (input_observer_ != nullptr && i8042_.mouseReporting()) {
+    input_observer_->onMousePacket(dx, dy, buttons);
+  }
   i8042_.injectMousePacket(dx, dy, buttons);
   if (trace_ != nullptr && pendingIrqs() != 0) {
     trace_->log("input", "mouse");

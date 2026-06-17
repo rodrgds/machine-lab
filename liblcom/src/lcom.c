@@ -354,28 +354,3 @@ int lcom_ac97_get_buffer(lcom_ac97_buffer_info_t *out) {
   out->bits_per_sample = reply.bits_per_sample;
   return LCOM_OK;
 }
-
-int lcom_ac97_play(size_t byte_count, uint32_t sample_rate, uint8_t channels) {
-  lcom_ac97_play_wire_t req;
-  req.byte_count = (uint64_t)byte_count;
-  req.sample_rate = sample_rate;
-  req.channels = channels;
-  req.bits_per_sample = 16;
-  memset(req.reserved, 0, sizeof(req.reserved));
-
-  lcom_status_reply_t reply;
-  if (request_reply(LCOM_MSG_AC97_PLAY, &req, sizeof(req), LCOM_MSG_STATUS,
-                    &reply, sizeof(reply), NULL) != 0) {
-    return LCOM_ERR;
-  }
-  return reply.status == 0 ? LCOM_OK : LCOM_ERR;
-}
-
-int lcom_ac97_stop(void) {
-  lcom_status_reply_t reply;
-  if (request_reply(LCOM_MSG_AC97_STOP, NULL, 0, LCOM_MSG_STATUS,
-                    &reply, sizeof(reply), NULL) != 0) {
-    return LCOM_ERR;
-  }
-  return reply.status == 0 ? LCOM_OK : LCOM_ERR;
-}

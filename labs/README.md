@@ -12,6 +12,7 @@ Suggested order:
 4. Lab 4: PS/2 mouse packets
 5. Lab 5: VBE framebuffer graphics and XPM sprites
 6. Lab 6: AC97-lite PCM audio
+7. Lab 7: 16550 UART serial ports
 
 Starter headers live in `labs/templates/<lab>/include/`. Complete reference
 solutions live in `labs/solutions/<lab>/` and are written only with the public
@@ -19,5 +20,5 @@ solutions live in `labs/solutions/<lab>/` and are written only with the public
 mapping, and AC97 buffer mapping.
 
 The reference solutions are tested by CTest targets named `lab1_solution` through
-`lab6_solution`. They run as normal student binaries through `lcom run`, with
+`lab7_solution`. They run as normal student binaries through `lcom run`, with
 scripted keyboard/mouse input and deterministic RTC, video, and audio output.

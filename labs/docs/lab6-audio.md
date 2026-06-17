@@ -1,8 +1,9 @@
 # Lab 6: AC97-lite PCM Audio
 
 Goal: map the virtual AC97-lite PCM buffer, write signed 16-bit stereo samples,
-and start playback. In headless mode, use `--audio-wav` to write the PCM stream
-to a `.wav` file for testing.
+program the PCM output sample rate and byte count registers, and start/stop
+playback through the bus-master control register. In headless mode, use
+`--audio-wav` to write the PCM stream to a `.wav` file for testing.
 
 Reference:
 

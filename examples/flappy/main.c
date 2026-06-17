@@ -15,6 +15,10 @@ typedef struct {
   int y;
 } mouse_state_t;
 
+enum {
+  INPUT_BYTES_PER_EVENT = 8
+};
+
 static void apply_input_result(app_t *app, app_input_result_t result) {
   if (result == APP_INPUT_FLAP) {
     sound_flap();
@@ -54,25 +58,20 @@ static app_input_result_t process_mouse_byte(app_t *app, mouse_state_t *mouse, u
   return app_mouse(app, mouse->x, mouse->y, (mouse->bytes[0] & BIT(0)) != 0);
 }
 
-static void drain_i8042(app_t *app, mouse_state_t *mouse) {
-  for (int drained = 0; drained < 256; drained++) {
-    uint8_t status = 0;
-    uint8_t data = 0;
-    if (lcom_port_read8(KBC_ST_REG, &status) != LCOM_OK) return;
-    if ((status & KBC_ST_OBF) == 0) return;
-    if ((status & KBC_ST_ERR) != 0) {
-      if (lcom_port_read8(KBC_OUT_BUF, &data) != LCOM_OK) return;
-      continue;
-    }
-    if (lcom_port_read8(KBC_OUT_BUF, &data) != LCOM_OK) return;
+static int handle_i8042_byte(app_t *app, mouse_state_t *mouse) {
+  uint8_t status = 0;
+  uint8_t data = 0;
+  if (lcom_port_read8(KBC_ST_REG, &status) != LCOM_OK) return 0;
+  if ((status & KBC_ST_OBF) == 0) return 0;
+  if (lcom_port_read8(KBC_OUT_BUF, &data) != LCOM_OK) return 0;
+  if ((status & KBC_ST_ERR) != 0) return 1;
 
-    if ((status & KBC_ST_AUX) != 0) {
-      apply_input_result(app, process_mouse_byte(app, mouse, data));
-    } else {
-      apply_input_result(app, app_key(app, data));
-    }
-    if (!app->running) return;
+  if ((status & KBC_ST_AUX) != 0) {
+    apply_input_result(app, process_mouse_byte(app, mouse, data));
+  } else {
+    apply_input_result(app, app_key(app, data));
   }
+  return 1;
 }
 
 int main(void) {
@@ -105,14 +104,16 @@ int main(void) {
     lcom_event_t ev;
     if (lcom_event_wait(&ev) != LCOM_OK) break;
 
-    if (ev.irq_mask & timer_irq.mask) {
+    if (ev.irq_mask & (kbd_irq.mask | mouse_irq.mask)) {
+      for (int i = 0; app.running && i < INPUT_BYTES_PER_EVENT; i++) {
+        if (!handle_i8042_byte(&app, &mouse)) break;
+      }
+    }
+
+    if (app.running && (ev.irq_mask & timer_irq.mask)) {
       app_update(&app);
       app_render(&app, &ctx);
       lcom_vbe_present();
-    }
-
-    if (ev.irq_mask & (kbd_irq.mask | mouse_irq.mask)) {
-      drain_i8042(&app, &mouse);
     }
   }
 

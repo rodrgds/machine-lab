@@ -64,6 +64,7 @@ private:
   void cleanupVideoCapture();
   bool setupDisplay();
   bool setupAudio();
+  bool updateAudioBackendFromDevice(bool was_playing, bool force_play);
   void drainPipe(int fd, const char *label);
   bool childExited();
 
@@ -73,6 +74,7 @@ private:
   Trace trace_;
   std::unique_ptr<DisplayBackend> display_;
   std::unique_ptr<AudioBackend> audio_;
+  bool audio_backend_playing_ = false;
 
   int client_fd_ = -1;
   int child_stdout_ = -1;

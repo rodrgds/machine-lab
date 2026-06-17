@@ -10,6 +10,19 @@ static int16_t sample_for(uint32_t frame, uint32_t sample_rate) {
   return (frame % period) < (period / 2u) ? 9000 : -9000;
 }
 
+static int ac97_start_pcm(uint32_t sample_rate, size_t byte_count) {
+  if (byte_count == 0 || byte_count > 0xFFFFu) return LCOM_ERR;
+  if (lcom_port_write16(AC97_NAM_BASE + AC97_PCM_FRONT_DAC_RATE,
+                        (uint16_t)sample_rate) != LCOM_OK) {
+    return LCOM_ERR;
+  }
+  if (lcom_port_write16(AC97_BM_BASE + AC97_PO_PICB,
+                        (uint16_t)byte_count) != LCOM_OK) {
+    return LCOM_ERR;
+  }
+  return lcom_port_write8(AC97_BM_BASE + AC97_PO_CR, AC97_PO_CR_RUN);
+}
+
 int main(void) {
   if (lcom_init() != LCOM_OK) return 1;
 
@@ -32,8 +45,7 @@ int main(void) {
   }
 
   size_t byte_count = sample_count * sizeof(int16_t);
-  if (lcom_port_write16(AC97_NAM_BASE + AC97_PCM_FRONT_DAC_RATE, (uint16_t)sample_rate) != LCOM_OK) return 1;
-  if (lcom_ac97_play(byte_count, sample_rate, channels) != LCOM_OK) return 1;
+  if (ac97_start_pcm(sample_rate, byte_count) != LCOM_OK) return 1;
   lcom_printf("audio tone %u frames at %u Hz\n", frames, sample_rate);
 
   lcom_phys_unmap(pcm, info.pcm_bytes);

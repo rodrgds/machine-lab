@@ -39,7 +39,5 @@ typedef struct {
 } lcom_ac97_buffer_info_t;
 
 int lcom_ac97_get_buffer(lcom_ac97_buffer_info_t *out);
-int lcom_ac97_play(size_t byte_count, uint32_t sample_rate, uint8_t channels);
-int lcom_ac97_stop(void);
 
 #endif

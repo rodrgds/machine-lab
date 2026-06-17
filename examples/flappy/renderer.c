@@ -3,12 +3,16 @@
 #include <stdio.h>
 #include <string.h>
 
-static void put_pixel(draw_context_t *ctx, int x, int y, uint32_t color) {
-  if (x < 0 || y < 0 || x >= ctx->info.width || y >= ctx->info.height) return;
+static void put_pixel_unchecked(draw_context_t *ctx, int x, int y, uint32_t color) {
   uint8_t *px = ctx->fb + (uint32_t)y * ctx->info.pitch + (uint32_t)x * ctx->info.bytes_per_pixel;
   px[0] = (uint8_t)(color & 0xFFu);
   px[1] = (uint8_t)((color >> 8) & 0xFFu);
   px[2] = (uint8_t)((color >> 16) & 0xFFu);
+}
+
+static void put_pixel(draw_context_t *ctx, int x, int y, uint32_t color) {
+  if (x < 0 || y < 0 || x >= ctx->info.width || y >= ctx->info.height) return;
+  put_pixel_unchecked(ctx, x, y, color);
 }
 
 void clear_screen(draw_context_t *ctx, uint32_t color) {
@@ -16,9 +20,25 @@ void clear_screen(draw_context_t *ctx, uint32_t color) {
 }
 
 void fill_rect(draw_context_t *ctx, int x, int y, int w, int h, uint32_t color) {
-  for (int yy = y; yy < y + h; yy++) {
-    for (int xx = x; xx < x + w; xx++) {
-      put_pixel(ctx, xx, yy, color);
+  if (w <= 0 || h <= 0) return;
+  int x0 = x < 0 ? 0 : x;
+  int y0 = y < 0 ? 0 : y;
+  int x1 = x + w > ctx->info.width ? ctx->info.width : x + w;
+  int y1 = y + h > ctx->info.height ? ctx->info.height : y + h;
+  if (x0 >= x1 || y0 >= y1) return;
+
+  uint8_t b = (uint8_t)(color & 0xFFu);
+  uint8_t g = (uint8_t)((color >> 8) & 0xFFu);
+  uint8_t r = (uint8_t)((color >> 16) & 0xFFu);
+  uint32_t bpp = ctx->info.bytes_per_pixel;
+
+  for (int yy = y0; yy < y1; yy++) {
+    uint8_t *px = ctx->fb + (uint32_t)yy * ctx->info.pitch + (uint32_t)x0 * bpp;
+    for (int xx = x0; xx < x1; xx++) {
+      px[0] = b;
+      px[1] = g;
+      px[2] = r;
+      px += bpp;
     }
   }
 }
@@ -54,10 +74,10 @@ void draw_xpm(draw_context_t *ctx, const char *const *xpm, int x, int y, int sca
     for (int xx = 0; xx < w; xx++) {
       unsigned char key = (unsigned char)row[xx];
       if (transparent[key]) continue;
-      for (int sy = 0; sy < scale; sy++) {
-        for (int sx = 0; sx < scale; sx++) {
-          put_pixel(ctx, x + xx * scale + sx, y + yy * scale + sy, table[key]);
-        }
+      if (scale == 1) {
+        put_pixel(ctx, x + xx, y + yy, table[key]);
+      } else {
+        fill_rect(ctx, x + xx * scale, y + yy * scale, scale, scale, table[key]);
       }
     }
   }

@@ -2,11 +2,13 @@
 
 #include "SdlBackend.hpp"
 
+#include "../core/MousePacketScheduler.hpp"
+
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
+#include <lcom/i8042.h>
 
 #include <algorithm>
-#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -50,15 +52,16 @@ SDL_Color rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255) {
 }
 
 constexpr uint64_t kMouseSampleIntervalNs = 1000000000ull / 60ull;
-constexpr int kMouseStep = 255;
+constexpr int kMaxSdlEventsPerPump = 256;
 
 } // namespace
 
-class SdlBackend final : public DisplayBackend {
+class SdlBackend final : public DisplayBackend, public InputObserver {
 public:
   explicit SdlBackend(SdlBackendOptions options) : options_(std::move(options)) {}
 
   bool start(Machine &machine) override {
+    SDL_SetHint(SDL_HINT_MOUSE_EMULATE_WARP_WITH_RELATIVE, "0");
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_AUDIO)) {
       std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
       return false;
@@ -71,8 +74,6 @@ public:
     const VbeModeInfo &mode = machine.vbe().currentMode();
     logical_width_ = mode.width;
     logical_height_ = mode.height;
-    guest_mouse_x_ = logical_width_ / 2;
-    guest_mouse_y_ = logical_height_ / 2;
 
     SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE;
     if (options_.fullscreen) flags |= SDL_WINDOW_FULLSCREEN;
@@ -111,16 +112,48 @@ public:
 
     terminal_lines_.push_back("LCOM Terminal");
     terminal_lines_.push_back("Press F3 for device state.");
-    SDL_SetEventEnabled(SDL_EVENT_MOUSE_MOTION, false);
+    observed_machine_ = &machine;
+    machine.setInputObserver(this);
     SDL_FlushEvent(SDL_EVENT_MOUSE_MOTION);
     return ensureTexture(machine);
+  }
+
+  void onKeyScancode(uint8_t byte) override {
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "0x%02x", byte);
+    pushHistory(scancode_history_, buf, 16);
+  }
+
+  void onMousePacket(int dx, int dy, uint8_t buttons) override {
+    int packet_dx = std::max(-255, std::min(255, dx));
+    int packet_dy = std::max(-255, std::min(255, dy));
+    uint8_t b0 = MOUSE_SYNC_BIT;
+    if (buttons & 0x01u) b0 |= BIT(0);
+    if (buttons & 0x02u) b0 |= BIT(1);
+    if (buttons & 0x04u) b0 |= BIT(2);
+    if (packet_dx < 0) b0 |= BIT(4);
+    if (packet_dy < 0) b0 |= BIT(5);
+
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "%02x %02x %02x  dx=%d dy=%d  %c%c%c",
+                  b0, static_cast<uint8_t>(packet_dx & 0xFF),
+                  static_cast<uint8_t>(packet_dy & 0xFF),
+                  packet_dx, packet_dy,
+                  (buttons & 0x01u) ? 'L' : '-',
+                  (buttons & 0x04u) ? 'M' : '-',
+                  (buttons & 0x02u) ? 'R' : '-');
+    pushHistory(mouse_packet_history_, buf, 12);
   }
 
   void pump(Machine &machine) override {
     SDL_Event ev;
 
     updateMouseCapture(machine);
-    while (SDL_PollEvent(&ev)) {
+    sampleRelativeMouse(machine, false);
+    SDL_FlushEvent(SDL_EVENT_MOUSE_MOTION);
+    int processed = 0;
+    while (processed < kMaxSdlEventsPerPump && SDL_PollEvent(&ev)) {
+      processed++;
       switch (ev.type) {
       case SDL_EVENT_QUIT:
         should_quit_ = true;
@@ -137,20 +170,22 @@ public:
         break;
       case SDL_EVENT_KEY_DOWN:
       case SDL_EVENT_KEY_UP:
-        sampleMouse(machine, true);
+        flushMousePacket(machine, true);
         handleKey(machine, ev.key);
+        break;
+      case SDL_EVENT_MOUSE_MOTION:
         break;
       case SDL_EVENT_MOUSE_BUTTON_DOWN:
       case SDL_EVENT_MOUSE_BUTTON_UP: {
         int lx = 0;
         int ly = 0;
         logicalPoint(ev.button.x, ev.button.y, lx, ly);
-        if (!isChromePoint(lx, ly) && machine.i8042().mouseReporting() && !debug_visible_) {
+        if (canInjectGuestMouse(machine) ||
+            (!isChromePoint(lx, ly) && machine.i8042().mouseReporting() && !debug_visible_)) {
           updateMouseCapture(machine);
-          sampleMouse(machine, true);
           updateHostButton(ev.button.button, ev.button.down);
-          machine.injectMouse(0, 0, host_mouse_buttons_);
-          last_mouse_sample_ns_ = SDL_GetTicksNS();
+          mouse_scheduler_.setButtons(host_mouse_buttons_);
+          flushMousePacket(machine, true);
         }
         break;
       }
@@ -159,7 +194,9 @@ public:
       }
     }
     updateMouseCapture(machine);
-    sampleMouse(machine, false);
+    sampleRelativeMouse(machine, false);
+    SDL_FlushEvent(SDL_EVENT_MOUSE_MOTION);
+    flushMousePacket(machine, false);
   }
 
   void consoleWrite(const char *data, size_t size) override {
@@ -189,6 +226,7 @@ public:
   }
 
   ~SdlBackend() override {
+    if (observed_machine_ != nullptr) observed_machine_->setInputObserver(nullptr);
     setMouseCaptured(false);
     if (texture_ != nullptr) SDL_DestroyTexture(texture_);
     if (font_ != nullptr) TTF_CloseFont(font_);
@@ -202,7 +240,10 @@ public:
 private:
   bool ensureTexture(Machine &machine) {
     const VbeModeInfo &mode = machine.vbe().currentMode();
-    if (texture_ != nullptr && texture_width_ == mode.width && texture_height_ == mode.height) {
+    SDL_PixelFormat desired_format =
+        mode.bytes_per_pixel == 3 ? SDL_PIXELFORMAT_BGR24 : SDL_PIXELFORMAT_RGB24;
+    if (texture_ != nullptr && texture_width_ == mode.width && texture_height_ == mode.height &&
+        texture_format_ == desired_format) {
       return true;
     }
     if (texture_ != nullptr) {
@@ -217,7 +258,8 @@ private:
                                      options_.integer_scale
                                          ? SDL_LOGICAL_PRESENTATION_INTEGER_SCALE
                                          : SDL_LOGICAL_PRESENTATION_LETTERBOX);
-    texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING,
+    texture_format_ = desired_format;
+    texture_ = SDL_CreateTexture(renderer_, texture_format_, SDL_TEXTUREACCESS_STREAMING,
                                  texture_width_, texture_height_);
     if (texture_ == nullptr) {
       std::fprintf(stderr, "SDL_CreateTexture failed: %s\n", SDL_GetError());
@@ -278,30 +320,35 @@ private:
     if (!ensureTexture(machine)) return;
     const VbeModeInfo &mode = machine.vbe().currentMode();
     const std::vector<uint8_t> &fb = machine.vbe().framebuffer();
-    rgb_buffer_.assign(static_cast<size_t>(mode.width) * mode.height * 3u, 0);
+    if (mode.bytes_per_pixel == 3) {
+      SDL_UpdateTexture(texture_, nullptr, fb.data(), static_cast<int>(mode.pitch));
+    } else {
+      size_t needed = static_cast<size_t>(mode.width) * mode.height * 3u;
+      if (rgb_buffer_.size() != needed) rgb_buffer_.assign(needed, 0);
 
-    for (uint16_t y = 0; y < mode.height; y++) {
-      const uint8_t *src = fb.data() + static_cast<size_t>(y) * mode.pitch;
-      uint8_t *dst = rgb_buffer_.data() + static_cast<size_t>(y) * mode.width * 3u;
-      for (uint16_t x = 0; x < mode.width; x++) {
-        const uint8_t *px = src + static_cast<size_t>(x) * mode.bytes_per_pixel;
-        uint8_t *out = dst + static_cast<size_t>(x) * 3u;
-        if (mode.bytes_per_pixel == 1) {
-          out[0] = out[1] = out[2] = px[0];
-        } else if (mode.bytes_per_pixel == 2) {
-          uint16_t v = static_cast<uint16_t>(px[0] | (px[1] << 8));
-          out[0] = static_cast<uint8_t>(((v >> 10) & 0x1F) * 255 / 31);
-          out[1] = static_cast<uint8_t>(((v >> 5) & 0x1F) * 255 / 31);
-          out[2] = static_cast<uint8_t>((v & 0x1F) * 255 / 31);
-        } else {
-          out[0] = px[2];
-          out[1] = px[1];
-          out[2] = px[0];
+      for (uint16_t y = 0; y < mode.height; y++) {
+        const uint8_t *src = fb.data() + static_cast<size_t>(y) * mode.pitch;
+        uint8_t *dst = rgb_buffer_.data() + static_cast<size_t>(y) * mode.width * 3u;
+        for (uint16_t x = 0; x < mode.width; x++) {
+          const uint8_t *px = src + static_cast<size_t>(x) * mode.bytes_per_pixel;
+          uint8_t *out = dst + static_cast<size_t>(x) * 3u;
+          if (mode.bytes_per_pixel == 1) {
+            out[0] = out[1] = out[2] = px[0];
+          } else if (mode.bytes_per_pixel == 2) {
+            uint16_t v = static_cast<uint16_t>(px[0] | (px[1] << 8));
+            out[0] = static_cast<uint8_t>(((v >> 10) & 0x1F) * 255 / 31);
+            out[1] = static_cast<uint8_t>(((v >> 5) & 0x1F) * 255 / 31);
+            out[2] = static_cast<uint8_t>((v & 0x1F) * 255 / 31);
+          } else {
+            out[0] = px[2];
+            out[1] = px[1];
+            out[2] = px[0];
+          }
         }
       }
-    }
 
-    SDL_UpdateTexture(texture_, nullptr, rgb_buffer_.data(), static_cast<int>(mode.width) * 3);
+      SDL_UpdateTexture(texture_, nullptr, rgb_buffer_.data(), static_cast<int>(mode.width) * 3);
+    }
     SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 255);
     SDL_RenderClear(renderer_);
     SDL_RenderTexture(renderer_, texture_, nullptr, nullptr);
@@ -339,7 +386,51 @@ private:
     drawText(logical_width_ - 98, 7, debug_visible_ ? "F3 debug on" : "F3 debug",
              rgba(192, 205, 218), title_font_);
 
-    if (debug_visible_) renderDebugPanel(machine);
+    if (debug_visible_) {
+      renderInputPanel();
+      renderDebugPanel(machine);
+    }
+  }
+
+  void renderInputPanel() {
+    int w = std::min(310, logical_width_ / 2 - 28);
+    SDL_FRect panel{14.0f, 44.0f, static_cast<float>(w),
+                    static_cast<float>(logical_height_ - 58)};
+    SDL_SetRenderDrawColor(renderer_, 19, 23, 29, 238);
+    SDL_RenderFillRect(renderer_, &panel);
+    SDL_SetRenderDrawColor(renderer_, 92, 108, 123, 255);
+    SDL_RenderRect(renderer_, &panel);
+
+    int x = static_cast<int>(panel.x) + 14;
+    int y = static_cast<int>(panel.y) + 12;
+    int lh = font_ != nullptr ? TTF_GetFontHeight(font_) + 4 : 18;
+
+    auto line = [&](const std::string &text, SDL_Color color = rgba(228, 233, 239)) {
+      drawText(x, y, text, color, font_);
+      y += lh;
+    };
+
+    line("Input Stream", rgba(113, 221, 237));
+    y += 4;
+    line("Latest scancodes", rgba(153, 221, 255));
+    if (scancode_history_.empty()) {
+      line("(none)", rgba(134, 148, 162));
+    } else {
+      for (auto it = scancode_history_.rbegin(); it != scancode_history_.rend(); ++it) {
+        line(*it);
+      }
+    }
+
+    y += 8;
+    line("Latest mouse packets", rgba(153, 221, 255));
+    if (mouse_packet_history_.empty()) {
+      line("(none)", rgba(134, 148, 162));
+    } else {
+      for (auto it = mouse_packet_history_.rbegin(); it != mouse_packet_history_.rend(); ++it) {
+        if (y > logical_height_ - lh - 16) break;
+        line(*it);
+      }
+    }
   }
 
   void renderDebugPanel(Machine &machine) {
@@ -379,8 +470,11 @@ private:
     std::snprintf(buf, sizeof(buf), "i8042 command byte: 0x%02x", machine.i8042().commandByte());
     line(buf);
     line(machine.i8042().mouseReporting() ? "mouse reporting: enabled" : "mouse reporting: disabled");
-    line(mouse_captured_ ? "mouse capture: relative" : "mouse capture: released");
+    line(mouse_captured_ ? "mouse capture: grabbed" : "mouse capture: released");
     std::snprintf(buf, sizeof(buf), "mouse sample cap: %u Hz", 60u);
+    line(buf);
+    std::snprintf(buf, sizeof(buf), "mouse backlog: dx=%d dy=%d",
+                  mouse_scheduler_.pendingDx(), mouse_scheduler_.pendingScreenDy());
     line(buf);
 
     y += 4;
@@ -397,8 +491,8 @@ private:
     y += 4;
     std::snprintf(buf, sizeof(buf), "host frame: %.1f fps  %.2f ms", current_fps_, current_frame_ms_);
     line(buf, rgba(153, 221, 255));
-    drawFrameChart(x, y, w - 28, 72);
-    y += 84;
+    drawFrameChart(x, y, w - 28, 124);
+    y += 136;
 
     y += 4;
     line("Keys: F3 debug, F11 fullscreen", rgba(172, 184, 196));
@@ -427,20 +521,30 @@ private:
     SDL_SetRenderDrawColor(renderer_, 55, 69, 84, 255);
     SDL_RenderRect(renderer_, &chart);
 
-    float target_y = static_cast<float>(y + h) - (16.67f / 50.0f) * static_cast<float>(h);
-    SDL_SetRenderDrawColor(renderer_, 70, 92, 112, 255);
-    SDL_RenderLine(renderer_, static_cast<float>(x), target_y,
-                   static_cast<float>(x + w), target_y);
+    auto guide = [&](float frame_ms, uint8_t r, uint8_t g, uint8_t b) {
+      float gy = chartY(y, h, frame_ms);
+      SDL_SetRenderDrawColor(renderer_, r, g, b, 255);
+      SDL_RenderLine(renderer_, static_cast<float>(x), gy,
+                     static_cast<float>(x + w), gy);
+    };
+    guide(16.67f, 70, 92, 112);
+    guide(33.33f, 58, 70, 84);
+
+    drawText(x + 6, y + 5, "16.7", rgba(126, 142, 158), font_);
+    drawText(x + 6, y + h - 22, "50ms", rgba(126, 142, 158), font_);
 
     if (frame_ms_samples_.size() < 2) return;
     SDL_SetRenderDrawColor(renderer_, 113, 221, 237, 255);
-    size_t first = frame_ms_samples_.size() > static_cast<size_t>(w)
-                       ? frame_ms_samples_.size() - static_cast<size_t>(w)
-                       : 0;
-    float prev_x = static_cast<float>(x);
+    size_t first = frame_ms_samples_.size() > 240 ? frame_ms_samples_.size() - 240 : 0;
+    size_t count = frame_ms_samples_.size() - first;
+    auto sampleX = [&](size_t index) {
+      float t = count <= 1 ? 0.0f : static_cast<float>(index) / static_cast<float>(count - 1);
+      return static_cast<float>(x) + t * static_cast<float>(w - 1);
+    };
+    float prev_x = sampleX(0);
     float prev_y = chartY(y, h, frame_ms_samples_[first]);
     for (size_t i = first + 1; i < frame_ms_samples_.size(); i++) {
-      float px = static_cast<float>(x + static_cast<int>(i - first));
+      float px = sampleX(i - first);
       float py = chartY(y, h, frame_ms_samples_[i]);
       SDL_RenderLine(renderer_, prev_x, prev_y, px, py);
       prev_x = px;
@@ -451,6 +555,15 @@ private:
   static float chartY(int y, int h, float frame_ms) {
     float clamped = std::max(0.0f, std::min(50.0f, frame_ms));
     return static_cast<float>(y + h) - (clamped / 50.0f) * static_cast<float>(h);
+  }
+
+  static void pushHistory(std::vector<std::string> &history,
+                          const std::string &line,
+                          size_t limit) {
+    history.push_back(line);
+    if (history.size() > limit) {
+      history.erase(history.begin(), history.begin() + (history.size() - limit));
+    }
   }
 
   void drawText(int x, int y, const std::string &text, SDL_Color color, TTF_Font *font) {
@@ -500,31 +613,41 @@ private:
     }
   }
 
-  void sampleMouse(Machine &machine, bool force) {
+  bool canInjectGuestMouse(Machine &machine) const {
+    return mouse_captured_ && machine.i8042().mouseReporting() && !debug_visible_;
+  }
+
+  void queueMouseMotion(int dx, int screen_dy) {
+    mouse_scheduler_.addMotion(dx, screen_dy);
+  }
+
+  void sampleRelativeMouse(Machine &machine, bool force) {
+    if (window_ == nullptr || !mouse_captured_) return;
+    float rel_x = 0.0f;
+    float rel_y = 0.0f;
+    SDL_MouseButtonFlags state = SDL_GetRelativeMouseState(&rel_x, &rel_y);
+    uint8_t buttons = buttonsFromState(state);
+    if (buttons != host_mouse_buttons_) {
+      host_mouse_buttons_ = buttons;
+      mouse_scheduler_.setButtons(host_mouse_buttons_);
+      force = true;
+    }
+    if (canInjectGuestMouse(machine)) {
+      queueMouseMotion(static_cast<int>(rel_x), static_cast<int>(rel_y));
+      flushMousePacket(machine, force);
+    }
+  }
+
+  void flushMousePacket(Machine &machine, bool force) {
     if (window_ == nullptr || renderer_ == nullptr || !mouse_captured_) return;
     uint64_t now = SDL_GetTicksNS();
     if (!force && now - last_mouse_sample_ns_ < kMouseSampleIntervalNs) {
       return;
     }
 
-    float rx = 0.0f;
-    float ry = 0.0f;
-    SDL_MouseButtonFlags state = SDL_GetRelativeMouseState(&rx, &ry);
-    host_mouse_buttons_ = buttonsFromState(state);
-
-    relative_mouse_x_ += rx;
-    relative_mouse_y_ += ry;
-    int screen_dx = static_cast<int>(std::round(relative_mouse_x_));
-    int screen_dy = static_cast<int>(std::round(relative_mouse_y_));
-    screen_dx = std::max(-kMouseStep, std::min(kMouseStep, screen_dx));
-    screen_dy = std::max(-kMouseStep, std::min(kMouseStep, screen_dy));
-    if (screen_dx != 0 || screen_dy != 0) {
-      relative_mouse_x_ -= static_cast<double>(screen_dx);
-      relative_mouse_y_ -= static_cast<double>(screen_dy);
-      machine.injectMouse(screen_dx, -screen_dy, host_mouse_buttons_);
-      guest_mouse_x_ = std::max(0, std::min(logical_width_ - 1, guest_mouse_x_ + screen_dx));
-      guest_mouse_y_ = std::max(0, std::min(logical_height_ - 1, guest_mouse_y_ + screen_dy));
-    }
+    auto packet = mouse_scheduler_.nextPacket(force);
+    if (!packet) return;
+    machine.injectMouse(packet->dx, packet->dy, packet->buttons);
     last_mouse_sample_ns_ = now;
   }
 
@@ -539,24 +662,17 @@ private:
   void setMouseCaptured(bool captured) {
     if (window_ == nullptr || mouse_captured_ == captured) return;
     if (captured) {
-      SDL_SetWindowMouseGrab(window_, true);
       SDL_SetWindowRelativeMouseMode(window_, true);
-      SDL_HideCursor();
-      relative_mouse_x_ = 0.0;
-      relative_mouse_y_ = 0.0;
-      float discard_x = 0.0f;
-      float discard_y = 0.0f;
-      SDL_GetRelativeMouseState(&discard_x, &discard_y);
+      SDL_FlushEvent(SDL_EVENT_MOUSE_MOTION);
+      SDL_GetRelativeMouseState(nullptr, nullptr);
+      mouse_scheduler_.reset();
       last_mouse_sample_ns_ = SDL_GetTicksNS();
     } else {
       SDL_SetWindowRelativeMouseMode(window_, false);
-      SDL_SetWindowMouseGrab(window_, false);
       SDL_ShowCursor();
-      relative_mouse_x_ = 0.0;
-      relative_mouse_y_ = 0.0;
-      float discard_x = 0.0f;
-      float discard_y = 0.0f;
-      SDL_GetRelativeMouseState(&discard_x, &discard_y);
+      SDL_FlushEvent(SDL_EVENT_MOUSE_MOTION);
+      SDL_GetRelativeMouseState(nullptr, nullptr);
+      mouse_scheduler_.reset();
     }
     mouse_captured_ = captured;
   }
@@ -566,6 +682,7 @@ private:
   SDL_Texture *texture_ = nullptr;
   TTF_Font *font_ = nullptr;
   TTF_Font *title_font_ = nullptr;
+  Machine *observed_machine_ = nullptr;
 
   SdlBackendOptions options_{};
   bool debug_visible_ = false;
@@ -573,10 +690,7 @@ private:
   bool should_quit_ = false;
   bool mouse_captured_ = false;
   uint8_t host_mouse_buttons_ = 0;
-  int guest_mouse_x_ = 400;
-  int guest_mouse_y_ = 300;
-  double relative_mouse_x_ = 0.0;
-  double relative_mouse_y_ = 0.0;
+  MousePacketScheduler mouse_scheduler_;
   uint64_t last_mouse_sample_ns_ = 0;
   uint64_t last_present_ns_ = 0;
   float current_frame_ms_ = 0.0f;
@@ -585,11 +699,14 @@ private:
   int logical_height_ = 600;
   int texture_width_ = 0;
   int texture_height_ = 0;
+  SDL_PixelFormat texture_format_ = SDL_PIXELFORMAT_UNKNOWN;
 
   std::vector<std::string> terminal_lines_;
   std::string current_line_;
   std::vector<uint8_t> rgb_buffer_;
   std::vector<float> frame_ms_samples_;
+  std::vector<std::string> scancode_history_;
+  std::vector<std::string> mouse_packet_history_;
 };
 
 std::unique_ptr<DisplayBackend> createSdlBackend(const SdlBackendOptions &options) {

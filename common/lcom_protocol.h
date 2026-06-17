@@ -33,9 +33,7 @@ typedef enum {
   LCOM_MSG_VBE_SET_MODE = 52,
   LCOM_MSG_VBE_PRESENT = 53,
   LCOM_MSG_AC97_GET_BUFFER = 60,
-  LCOM_MSG_AC97_BUFFER_REPLY = 61,
-  LCOM_MSG_AC97_PLAY = 62,
-  LCOM_MSG_AC97_STOP = 63
+  LCOM_MSG_AC97_BUFFER_REPLY = 61
 } lcom_msg_type_t;
 
 typedef struct {
@@ -140,14 +138,6 @@ typedef struct {
   uint8_t bits_per_sample;
   uint8_t reserved[2];
 } lcom_ac97_buffer_wire_t;
-
-typedef struct {
-  uint64_t byte_count;
-  uint32_t sample_rate;
-  uint8_t channels;
-  uint8_t bits_per_sample;
-  uint8_t reserved[2];
-} lcom_ac97_play_wire_t;
 
 #ifdef __cplusplus
 }

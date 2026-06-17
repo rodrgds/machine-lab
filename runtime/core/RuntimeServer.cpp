@@ -7,8 +7,11 @@
 #include "../backends/SdlBackend.hpp"
 #endif
 
+#include <lcom/ac97.h>
+
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -29,6 +32,8 @@ namespace lcom {
 
 static constexpr size_t kFramebufferShmBytes = 1280u * 1024u * 4u;
 static constexpr size_t kAudioShmOffset = kFramebufferShmBytes;
+static constexpr int kMaxRealtimeTicksPerLoop = 4;
+static constexpr auto kDisplayPumpInterval = std::chrono::nanoseconds(1000000000ull / 120ull);
 
 static int writeAll(int fd, const void *buf, size_t len) {
   const uint8_t *p = static_cast<const uint8_t *>(buf);
@@ -89,10 +94,67 @@ int RuntimeServer::run() {
   if (!setup()) return 1;
   if (!startChild()) return 1;
 
+  using Clock = std::chrono::steady_clock;
+  auto realtimeTickInterval = [&]() {
+    uint32_t hz = machine_.pit().channelFrequency(0);
+    if (hz == 0) hz = 60;
+    uint64_t ns = 1000000000ull / hz;
+    if (ns < 1000000ull) ns = 1000000ull;
+    return std::chrono::nanoseconds(ns);
+  };
+  auto next_realtime_tick = Clock::now() + realtimeTickInterval();
+  auto next_display_pump = Clock::now();
+  auto advanceRealtimeIfDue = [&]() {
+    if (!options_.realtime) return;
+    auto now = Clock::now();
+    int advanced = 0;
+    while (now >= next_realtime_tick && child_running_) {
+      advanceVirtualTimeOnce();
+      advanced++;
+      auto interval = realtimeTickInterval();
+      next_realtime_tick += interval;
+      if (advanced >= kMaxRealtimeTicksPerLoop && now >= next_realtime_tick) {
+        next_realtime_tick = now + interval;
+        break;
+      }
+    }
+    if (advanced > 0) maybeSatisfyEventWait();
+  };
+  auto pumpDisplayIfDue = [&]() {
+    if (display_ == nullptr) return;
+    if (options_.realtime) {
+      auto now = Clock::now();
+      if (now < next_display_pump) return;
+      next_display_pump = now + kDisplayPumpInterval;
+    }
+    display_->pump(machine_);
+    maybeSatisfyEventWait();
+  };
+  auto selectTimeout = [&]() {
+    timeval tv{};
+    if (options_.realtime) {
+      auto now = Clock::now();
+      auto next_wake = next_realtime_tick;
+      if (display_ != nullptr && next_display_pump < next_wake) next_wake = next_display_pump;
+      auto wait = next_wake > now
+                      ? std::chrono::duration_cast<std::chrono::microseconds>(next_wake - now)
+                      : std::chrono::microseconds(0);
+      if (wait > std::chrono::microseconds(16000)) wait = std::chrono::microseconds(16000);
+      tv.tv_sec = static_cast<long>(wait.count() / 1000000);
+      tv.tv_usec = static_cast<int>(wait.count() % 1000000);
+    } else {
+      tv.tv_sec = 0;
+      tv.tv_usec = 10000;
+    }
+    return tv;
+  };
+
   while (child_running_ || client_fd_ >= 0) {
+    advanceRealtimeIfDue();
+    pumpDisplayIfDue();
     maybeSatisfyEventWait();
 
-    if (waiting_event_ && options_.headless && machine_.pendingIrqs() == 0) {
+    if (waiting_event_ && options_.headless) {
       advanceVirtualTimeOnce();
       maybeSatisfyEventWait();
       if (!childExited()) continue;
@@ -111,16 +173,14 @@ int RuntimeServer::run() {
     add_fd(child_stdout_);
     add_fd(child_stderr_);
 
-    timeval tv{};
-    tv.tv_sec = 0;
-    tv.tv_usec = options_.realtime ? 16000 : 10000;
+    timeval tv = selectTimeout();
     int ready = max_fd >= 0 ? select(max_fd + 1, &readfds, nullptr, nullptr, &tv) : 0;
     if (ready < 0 && errno != EINTR) {
       perror("select");
       break;
     }
 
-    if (display_ != nullptr) display_->pump(machine_);
+    pumpDisplayIfDue();
 
     if (client_fd_ >= 0 && FD_ISSET(client_fd_, &readfds)) {
       if (!handleClientMessage()) {
@@ -131,11 +191,9 @@ int RuntimeServer::run() {
     if (child_stdout_ >= 0 && FD_ISSET(child_stdout_, &readfds)) drainPipe(child_stdout_, "stdout");
     if (child_stderr_ >= 0 && FD_ISSET(child_stderr_, &readfds)) drainPipe(child_stderr_, "stderr");
 
-    if (options_.realtime) {
-      advanceVirtualTimeOnce();
-    }
+    advanceRealtimeIfDue();
 
-    if (display_ != nullptr) display_->present(machine_);
+    if (display_ != nullptr && !machine_.vbe().graphicsMode()) display_->present(machine_);
 
     childExited();
   }
@@ -404,7 +462,11 @@ bool RuntimeServer::handleClientMessage() {
   case LCOM_MSG_PORT_WRITE8: {
     if (hdr.size != sizeof(lcom_port_write8_t)) return false;
     auto *req = reinterpret_cast<lcom_port_write8_t *>(payload);
+    bool was_audio_playing = machine_.ac97().playing();
+    bool force_audio_play = req->port == AC97_BM_BASE + AC97_PO_CR &&
+                            (req->value & AC97_PO_CR_RUN) != 0;
     bool ok = machine_.writePort8(req->port, req->value);
+    if (ok) ok = updateAudioBackendFromDevice(was_audio_playing, force_audio_play);
     sendStatus(hdr.request_id, ok ? 0 : -1);
     return true;
   }
@@ -497,36 +559,35 @@ bool RuntimeServer::handleClientMessage() {
     sendMessage(client_fd_, LCOM_MSG_AC97_BUFFER_REPLY, hdr.request_id, &reply, sizeof(reply));
     return true;
   }
-  case LCOM_MSG_AC97_PLAY: {
-    if (hdr.size != sizeof(lcom_ac97_play_wire_t)) return false;
-    auto *req = reinterpret_cast<lcom_ac97_play_wire_t *>(payload);
-    bool ok = machine_.ac97().play(static_cast<size_t>(req->byte_count),
-                                  req->sample_rate,
-                                  req->channels);
-    if (ok) {
-      syncAudioFromSharedMemory();
-      std::string error;
-      size_t frames = machine_.ac97().playByteCount() /
-                      (sizeof(int16_t) * machine_.ac97().channels());
-      ok = audio_ == nullptr ||
-           audio_->playPcm16(reinterpret_cast<const int16_t *>(machine_.ac97().pcm().data()),
-                             frames,
-                             machine_.ac97().sampleRate(),
-                             machine_.ac97().channels(),
-                             error);
-      if (!ok && !error.empty()) std::cerr << "lcom: audio play failed: " << error << "\n";
-    }
-    sendStatus(hdr.request_id, ok ? 0 : -1);
-    return true;
-  }
-  case LCOM_MSG_AC97_STOP:
-    machine_.ac97().stop();
-    if (audio_ != nullptr) audio_->stop();
-    sendStatus(hdr.request_id, 0);
-    return true;
   default:
     return false;
   }
+}
+
+bool RuntimeServer::updateAudioBackendFromDevice(bool was_playing, bool force_play) {
+  bool now_playing = machine_.ac97().playing();
+  if (!force_play && was_playing == now_playing) return true;
+
+  if (!now_playing) {
+    if (audio_backend_playing_ && audio_ != nullptr) audio_->stop();
+    audio_backend_playing_ = false;
+    return true;
+  }
+
+  syncAudioFromSharedMemory();
+  if (audio_backend_playing_ && audio_ != nullptr) audio_->stop();
+  std::string error;
+  size_t frames = machine_.ac97().playByteCount() /
+                  (sizeof(int16_t) * machine_.ac97().channels());
+  bool ok = audio_ == nullptr ||
+            audio_->playPcm16(reinterpret_cast<const int16_t *>(machine_.ac97().pcm().data()),
+                              frames,
+                              machine_.ac97().sampleRate(),
+                              machine_.ac97().channels(),
+                              error);
+  audio_backend_playing_ = ok;
+  if (!ok && !error.empty()) std::cerr << "lcom: audio play failed: " << error << "\n";
+  return ok;
 }
 
 void RuntimeServer::handleConsoleWrite(const char *data, size_t size) {

@@ -60,7 +60,7 @@ static void configureCliApp(CLI::App &app) {
   auto *lab = app.add_subcommand("lab", "Inspect lab function requests");
   lab->add_subcommand("list", "List labs");
   auto *show = lab->add_subcommand("show", "Show requested functions for a lab");
-  show->add_option("lab", "lab1 through lab6")->required();
+  show->add_option("lab", "lab1 through lab7")->required();
 
   auto *docs = app.add_subcommand("docs", "Generate command documentation");
   docs->add_subcommand("cli", "Print CLI command reference");
@@ -108,7 +108,8 @@ static int labList() {
       << "lab3  i8042 keyboard and PS/2 scancodes\n"
       << "lab4  PS/2 mouse packets\n"
       << "lab5  VBE framebuffer graphics and XPM sprites\n"
-      << "lab6  AC97-lite PCM audio\n";
+      << "lab6  AC97-lite PCM audio\n"
+      << "lab7  16550 UART serial ports\n";
   return 0;
 }
 
@@ -125,6 +126,8 @@ static int labShow(const std::string &lab) {
     std::cout << "lab5: video_set_mode, video_map_framebuffer, video_fill_rect, video_draw_xpm, video_present\n";
   } else if (lab == "lab6") {
     std::cout << "lab6: audio_map_buffer, audio_fill_square_wave, audio_play, audio_stop\n";
+  } else if (lab == "lab7") {
+    std::cout << "lab7: uart_config, uart_enable_fifo, uart_enable_rx_interrupt, uart_set_loopback, uart_send_byte, uart_read_byte, uart_subscribe, uart_unsubscribe\n";
   } else {
     std::cerr << "lcom: unknown lab " << lab << "\n";
     return 1;
@@ -167,7 +170,7 @@ static int completionScript(const std::string &shell) {
         << "  case \"$cmd\" in\n"
         << "    run|replay) COMPREPLY=( $(compgen -W \"" << run_opts << "\" -- \"$cur\") ) ;;\n"
         << "    bundle) COMPREPLY=( $(compgen -W \"" << bundle_opts << "\" -- \"$cur\") ) ;;\n"
-        << "    lab) COMPREPLY=( $(compgen -W \"list show lab1 lab2 lab3 lab4 lab5 lab6\" -- \"$cur\") ) ;;\n"
+        << "    lab) COMPREPLY=( $(compgen -W \"list show lab1 lab2 lab3 lab4 lab5 lab6 lab7\" -- \"$cur\") ) ;;\n"
         << "    completion) COMPREPLY=( $(compgen -W \"bash zsh fish\" -- \"$cur\") ) ;;\n"
         << "  esac\n"
         << "}\ncomplete -F _lcom_complete lcom\n";
@@ -183,7 +186,7 @@ static int completionScript(const std::string &shell) {
         << "  case $words[2] in\n"
         << "    run|replay) _arguments '--headless' '--display[backend]:' '--audio[backend]:' '--audio-wav[file]:file:_files' '--realtime' '--no-realtime' '--fullscreen' '--scale[n]:' '--integer-scale' '--script[file]:file:_files' '--trace[file]:file:_files' '--dump-frame[file]:file:_files' '--frame-dir[dir]:dir:_files -/' '--video[file]:file:_files' '--video-fps[n]:' '--rtc[iso-time]:' '--max-ticks[n]:' '*::program:_files' ;;\n"
         << "    bundle) _arguments '--program[student binary]:file:_files' '--name[name]:' '--output[dir]:dir:_files -/' '--script[script]:file:_files' '--display[backend]:' '--audio[backend]:' '--headless' '--realtime' '--no-realtime' ;;\n"
-        << "    lab) _arguments '1:action:(list show)' '2:lab:(lab1 lab2 lab3 lab4 lab5 lab6)' ;;\n"
+        << "    lab) _arguments '1:action:(list show)' '2:lab:(lab1 lab2 lab3 lab4 lab5 lab6 lab7)' ;;\n"
         << "    completion) _arguments '1:shell:(bash zsh fish)' ;;\n"
         << "  esac\n"
         << "}\n_lcom \"$@\"\n";

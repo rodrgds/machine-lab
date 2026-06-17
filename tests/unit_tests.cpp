@@ -1,4 +1,5 @@
 #include "../runtime/core/Machine.hpp"
+#include "../runtime/core/MousePacketScheduler.hpp"
 
 #include <lcom/i8042.h>
 #include <lcom/i8254.h>
@@ -70,6 +71,74 @@ static void test_i8042_keyboard_irq_and_ports() {
   uint8_t data = 0;
   CHECK(machine.readPort8(KBC_OUT_BUF, data));
   CHECK(data == 0x1E);
+}
+
+static void test_i8042_reasserts_buffered_irq_on_subscribe() {
+  lcom::Machine machine;
+  machine.injectKey("A", true);
+  CHECK(machine.pendingIrqs() == 0);
+
+  lcom::IrqSubscription sub;
+  CHECK(machine.subscribeIrq(KBC_IRQ, sub));
+  CHECK(machine.pendingIrqs() == BIT(KBC_IRQ));
+
+  uint8_t data = 0;
+  CHECK(machine.readPort8(KBC_OUT_BUF, data));
+  CHECK(data == 0x1E);
+}
+
+static void test_mouse_scheduler_coalesces_motion() {
+  lcom::MousePacketScheduler scheduler;
+  for (int i = 0; i < 10000; i++) scheduler.addMotion(1, 1);
+
+  auto packet = scheduler.nextPacket(false);
+  CHECK(packet.has_value());
+  CHECK(packet->dx == 255);
+  CHECK(packet->dy == -255);
+
+  int emitted = 1;
+  while ((packet = scheduler.nextPacket(false)).has_value()) emitted++;
+  CHECK(emitted <= 5);
+}
+
+static void test_mouse_scheduler_clamps_and_flips_y() {
+  lcom::MousePacketScheduler scheduler;
+  scheduler.addMotion(-400, 300);
+  auto packet = scheduler.nextPacket(false);
+  CHECK(packet.has_value());
+  CHECK(packet->dx == -255);
+  CHECK(packet->dy == -255);
+}
+
+static void test_mouse_scheduler_button_change_emits_zero_delta() {
+  lcom::MousePacketScheduler scheduler;
+  CHECK(!scheduler.nextPacket(false).has_value());
+  scheduler.setButtons(0x01);
+  auto packet = scheduler.nextPacket(true);
+  CHECK(packet.has_value());
+  CHECK(packet->dx == 0);
+  CHECK(packet->dy == 0);
+  CHECK(packet->buttons == 0x01);
+  CHECK(!scheduler.nextPacket(false).has_value());
+}
+
+static void test_mouse_scheduler_bounds_backlog() {
+  lcom::MousePacketScheduler scheduler;
+  scheduler.addMotion(50000, -50000);
+  CHECK(scheduler.pendingDx() == 1024);
+  CHECK(scheduler.pendingScreenDy() == -1024);
+  auto packet = scheduler.nextPacket(false);
+  CHECK(packet.has_value());
+  CHECK(packet->dx == 255);
+  CHECK(packet->dy == 255);
+  CHECK(scheduler.pendingDx() == 769);
+  CHECK(scheduler.pendingScreenDy() == -769);
+
+  int emitted = 1;
+  while ((packet = scheduler.nextPacket(false)).has_value()) emitted++;
+  CHECK(emitted == 5);
+  CHECK(scheduler.pendingDx() == 0);
+  CHECK(scheduler.pendingScreenDy() == 0);
 }
 
 static void test_i8042_command_byte_and_mouse_packet() {
@@ -202,6 +271,11 @@ int main() {
   test_irq_controller_shape();
   test_pit_programming_and_readback();
   test_i8042_keyboard_irq_and_ports();
+  test_i8042_reasserts_buffered_irq_on_subscribe();
+  test_mouse_scheduler_coalesces_motion();
+  test_mouse_scheduler_clamps_and_flips_y();
+  test_mouse_scheduler_button_change_emits_zero_delta();
+  test_mouse_scheduler_bounds_backlog();
   test_i8042_command_byte_and_mouse_packet();
   test_rtc_cmos_bcd_registers();
   test_vbe_mode_and_framebuffer();

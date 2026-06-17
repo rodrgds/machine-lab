@@ -97,9 +97,17 @@ uint8_t Ac97::readBusMaster(uint16_t offset) const {
 void Ac97::writeBusMaster(uint16_t offset, uint8_t value) {
   if (offset >= bm_.size()) return;
   bm_[offset] = value;
+  if (offset == AC97_PO_PICB || offset == AC97_PO_PICB + 1) {
+    play_byte_count_ = static_cast<size_t>(bm_[AC97_PO_PICB] |
+                                           (bm_[AC97_PO_PICB + 1] << 8));
+    if (play_byte_count_ > pcm_.size()) play_byte_count_ = pcm_.size();
+  }
   if (offset == AC97_PO_CR) {
     if (value & AC97_PO_CR_RESET) stop();
     if ((value & AC97_PO_CR_RUN) != 0) {
+      if (play_byte_count_ == 0 || play_byte_count_ > pcm_.size()) {
+        play_byte_count_ = pcm_.size();
+      }
       playing_ = true;
       bm_[AC97_PO_SR] = AC97_PO_SR_BCIS;
     } else {

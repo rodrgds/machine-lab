@@ -156,6 +156,9 @@ add_lab_solution_test(lab5
 add_lab_solution_test(lab6
   labs/solutions/lab6/src/audio_lib.c
 )
+add_lab_solution_test(lab7
+  labs/solutions/lab7/src/uart_lib.c
+)
 
 if(BUILD_TESTING)
   file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/test-output)
@@ -178,6 +181,9 @@ if(BUILD_TESTING)
   )
   add_test(NAME lab6_solution
     COMMAND $<TARGET_FILE:lcom> run --headless --audio-wav ${CMAKE_BINARY_DIR}/test-output/lab6-solution.wav -- $<TARGET_FILE:lab6_solution_test>
+  )
+  add_test(NAME lab7_solution
+    COMMAND $<TARGET_FILE:lcom> run --headless -- $<TARGET_FILE:lab7_solution_test>
   )
   add_test(NAME integration
     COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration.sh

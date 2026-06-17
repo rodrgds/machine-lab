@@ -30,9 +30,27 @@ int audio_fill_square_wave(uint32_t hz, uint32_t ms) {
 
 int audio_play(size_t byte_count) {
   if (byte_count == 0) byte_count = g_last_bytes;
-  return lcom_ac97_play(byte_count, g_info.sample_rate, g_info.channels);
+  if (byte_count == 0 || byte_count > 0xFFFFu) return LCOM_ERR;
+
+  if (lcom_port_write8(AC97_NAM_BASE + AC97_PCM_FRONT_DAC_RATE,
+                       (uint8_t)(g_info.sample_rate & 0xFFu)) != LCOM_OK) {
+    return LCOM_ERR;
+  }
+  if (lcom_port_write8(AC97_NAM_BASE + AC97_PCM_FRONT_DAC_RATE + 1,
+                       (uint8_t)(g_info.sample_rate >> 8)) != LCOM_OK) {
+    return LCOM_ERR;
+  }
+  if (lcom_port_write8(AC97_BM_BASE + AC97_PO_PICB,
+                       (uint8_t)(byte_count & 0xFFu)) != LCOM_OK) {
+    return LCOM_ERR;
+  }
+  if (lcom_port_write8(AC97_BM_BASE + AC97_PO_PICB + 1,
+                       (uint8_t)(byte_count >> 8)) != LCOM_OK) {
+    return LCOM_ERR;
+  }
+  return lcom_port_write8(AC97_BM_BASE + AC97_PO_CR, AC97_PO_CR_RUN);
 }
 
 int audio_stop(void) {
-  return lcom_ac97_stop();
+  return lcom_port_write8(AC97_BM_BASE + AC97_PO_CR, 0);
 }

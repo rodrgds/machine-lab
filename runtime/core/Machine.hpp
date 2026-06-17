@@ -17,6 +17,13 @@
 
 namespace lcom {
 
+class InputObserver {
+public:
+  virtual ~InputObserver() = default;
+  virtual void onKeyScancode(uint8_t byte) = 0;
+  virtual void onMousePacket(int dx, int dy, uint8_t buttons) = 0;
+};
+
 class Machine {
 public:
   Machine();
@@ -46,6 +53,7 @@ public:
   Uart16550 &com2() { return com2_; }
 
   void setTrace(Trace *trace) { trace_ = trace; }
+  void setInputObserver(InputObserver *observer) { input_observer_ = observer; }
 
 private:
   uint64_t tick_ = 0;
@@ -59,6 +67,7 @@ private:
   Uart16550 com1_;
   Uart16550 com2_;
   Trace *trace_ = nullptr;
+  InputObserver *input_observer_ = nullptr;
 };
 
 } // namespace lcom

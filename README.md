@@ -91,7 +91,7 @@ MP4 when ffmpeg is available.
 
 Student-facing lab material lives under `labs/`. Starter headers are in
 `labs/templates/<lab>/include/`, complete reference solutions are in
-`labs/solutions/<lab>/`, and CTest runs `lab1_solution` through `lab6_solution`
+`labs/solutions/<lab>/`, and CTest runs `lab1_solution` through `lab7_solution`
 against those solutions as normal `lcom run` programs.
 
 ## Student API Sketch
