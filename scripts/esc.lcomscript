@@ -1,0 +1,3 @@
+# Simple keyboard script for headless Lab 3 style tests.
+at 1 key ESC down
+at 2 key ESC up
