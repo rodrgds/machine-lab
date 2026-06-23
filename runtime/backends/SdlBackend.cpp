@@ -455,8 +455,8 @@ private:
 
   void renderInputPanel() {
     int w = std::min(310, logical_width_ / 2 - 28);
-    SDL_FRect panel{14.0f, 44.0f, static_cast<float>(w),
-                    static_cast<float>(logical_height_ - 58)};
+    SDL_FRect panel{14.0f, 14.0f, static_cast<float>(w),
+                    static_cast<float>(logical_height_ - 28)};
     SDL_SetRenderDrawColor(renderer_, 19, 23, 29, 238);
     SDL_RenderFillRect(renderer_, &panel);
     SDL_SetRenderDrawColor(renderer_, 92, 108, 123, 255);
@@ -496,8 +496,8 @@ private:
 
   void renderDebugPanel(Machine &machine) {
     int w = std::min(420, logical_width_ - 32);
-    SDL_FRect panel{static_cast<float>(logical_width_ - w - 14), 44.0f,
-                    static_cast<float>(w), static_cast<float>(logical_height_ - 58)};
+    SDL_FRect panel{static_cast<float>(logical_width_ - w - 14), 14.0f,
+                    static_cast<float>(w), static_cast<float>(logical_height_ - 28)};
     SDL_SetRenderDrawColor(renderer_, 19, 23, 29, 238);
     SDL_RenderFillRect(renderer_, &panel);
     SDL_SetRenderDrawColor(renderer_, 92, 108, 123, 255);
@@ -572,9 +572,6 @@ private:
       pause_button_ = SDL_FRect{0.0f, 0.0f, 0.0f, 0.0f};
       stop_button_ = SDL_FRect{0.0f, 0.0f, 0.0f, 0.0f};
     }
-
-    y += 40;
-    line("Keys: F3 debug, F8 out/in, F9 record, F10 save, F11 fullscreen", rgba(172, 184, 196));
   }
 
   void drawDebugButton(SDL_FRect &rect, int x, int y, int w, const char *label, SDL_Color color) {
