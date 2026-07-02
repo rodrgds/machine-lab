@@ -42,13 +42,13 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build tar gzip
+          sudo apt-get install -y build-essential cmake ninja-build tar gzip ffmpeg
 
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         run: |
           brew update
-          brew install cmake ninja
+          brew install cmake ninja ffmpeg
 
       - name: Set up MSYS2
         if: runner.os == 'Windows'
@@ -61,9 +61,14 @@ jobs:
             gcc
             cmake
             ninja
+            mingw-w64-x86_64-ffmpeg
             tar
             gzip
             zip
+
+      - name: Add MSYS2 FFmpeg to PATH
+        if: runner.os == 'Windows'
+        run: echo "/mingw64/bin" >> "$GITHUB_PATH"
 
       - name: Configure
         run: cmake -S . -B build -G Ninja -DMACHINE_LAB_WITH_SDL=OFF -DCMAKE_BUILD_TYPE=Release
