@@ -778,6 +778,7 @@ bool RuntimeServer::renderVideo() {
   }
 
   std::string fps = std::to_string(options_.video_fps == 0 ? 60 : options_.video_fps);
+  std::string frame_count = std::to_string(frame_index_);
   std::string pattern = (std::filesystem::path(active_frame_dir_) / "frame_%06d.ppm").string();
 
   pid_t pid = fork();
@@ -786,8 +787,9 @@ bool RuntimeServer::renderVideo() {
     return false;
   }
   if (pid == 0) {
-    execlp("ffmpeg", "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-           "-framerate", fps.c_str(), "-i", pattern.c_str(),
+    execlp("ffmpeg", "ffmpeg", "-nostdin", "-y", "-hide_banner", "-loglevel", "error",
+           "-f", "image2", "-start_number", "1", "-framerate", fps.c_str(),
+           "-i", pattern.c_str(), "-frames:v", frame_count.c_str(),
            "-pix_fmt", "yuv420p", options_.video_path.c_str(), nullptr);
     perror("ffmpeg");
     _exit(127);

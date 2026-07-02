@@ -253,5 +253,6 @@ if(BUILD_TESTING)
   set_tests_properties(integration PROPERTIES
     DEPENDS unit
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    TIMEOUT 300
   )
 endif()
