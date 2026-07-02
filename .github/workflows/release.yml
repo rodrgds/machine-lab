@@ -68,7 +68,10 @@ jobs:
 
       - name: Add MSYS2 FFmpeg to PATH
         if: runner.os == 'Windows'
-        run: echo "/mingw64/bin" >> "$GITHUB_PATH"
+        run: echo "C:\\msys64\\mingw64\\bin" >> "$GITHUB_PATH"
+
+      - name: Verify FFmpeg
+        run: ffmpeg -version
 
       - name: Configure
         run: cmake -S . -B build -G Ninja -DMACHINE_LAB_WITH_SDL=OFF -DCMAKE_BUILD_TYPE=Release
