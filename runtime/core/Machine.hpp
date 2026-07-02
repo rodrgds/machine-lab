@@ -1,5 +1,5 @@
-#ifndef LCOM_NG_MACHINE_HPP
-#define LCOM_NG_MACHINE_HPP
+#ifndef MACHINE_LAB_MACHINE_HPP
+#define MACHINE_LAB_MACHINE_HPP
 
 #include "Bus.hpp"
 #include "IrqController.hpp"

@@ -1,5 +1,5 @@
-#ifndef LCOM_NG_I8042_HPP
-#define LCOM_NG_I8042_HPP
+#ifndef MACHINE_LAB_I8042_HPP
+#define MACHINE_LAB_I8042_HPP
 
 #include "../core/IrqController.hpp"
 #include "../core/PortDevice.hpp"

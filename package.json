@@ -1,0 +1,19 @@
+{
+  "name": "machine-lab",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "docs:assets": "sh scripts/sync_docs_site_assets.sh",
+    "docs:dev": "npm run docs:assets && vitepress dev docs-site --host 0.0.0.0",
+    "docs:build": "npm run docs:assets && vitepress build docs-site",
+    "docs:preview": "vitepress preview docs-site --host 0.0.0.0",
+    "docs:check": "npm run docs:build && sh scripts/check_docs_site.sh",
+    "deploy:docs": "npm run docs:build && wrangler pages deploy",
+    "video:render": "sh scripts/render_public_demo.sh"
+  },
+  "devDependencies": {
+    "vitepress": "1.6.4",
+    "wrangler": "4.106.0"
+  }
+}

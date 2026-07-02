@@ -1,28 +1,28 @@
 # Runtime And CLI
 
 The CLI is the supported entry point for running, testing, recording, and
-packaging student programs. Use `lcom <command> --help` for the authoritative
+packaging student programs. Use `machinelab <command> --help` for the authoritative
 option list; this guide explains when to use each command.
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
-| `lcom run` | host one student program |
-| `lcom run-pair` | host two programs with bridged UARTs |
-| `lcom replay` | run one program with an authored input timeline |
-| `lcom setup` | generate a student workspace |
-| `lcom test` | compile and execute one predefined student lab test |
-| `lcom lab` | list labs or inspect requested functions |
-| `lcom bundle` | package a runtime and program for the current platform |
-| `lcom docs cli` | print a Markdown CLI summary |
-| `lcom completion` | emit Bash, Zsh, or Fish completion |
+| `machinelab run` | host one student program |
+| `machinelab run-pair` | host two programs with bridged UARTs |
+| `machinelab replay` | run one program with an authored input timeline |
+| `machinelab setup` | generate a student workspace |
+| `machinelab test` | compile and execute one predefined student lab test |
+| `machinelab lab` | list labs or inspect requested functions |
+| `machinelab bundle` | package a runtime and program for the current platform |
+| `machinelab docs cli` | print a Markdown CLI summary |
+| `machinelab completion` | emit Bash, Zsh, or Fish completion |
 
 ## Interactive And Headless Runs
 
 ```sh
-lcom run build/examples/flappy_bird
-lcom run --headless --max-ticks 300 -- build/examples/timer_int 3
+machinelab run build/examples/flappy_bird
+machinelab run --headless --max-ticks 300 -- build/examples/timer_int 3
 ```
 
 SDL runs advance virtual time from host time by default. Headless runs advance
@@ -32,9 +32,9 @@ headless programs that do not terminate.
 Useful output options:
 
 ```sh
-lcom run --headless --trace build/run.jsonl -- build/examples/timer_int 3
-lcom run --headless --dump-frame build/frame.ppm -- build/examples/vbe_rectangle
-lcom run --headless --audio-wav build/audio.wav -- build/examples/audio_tone
+machinelab run --headless --trace build/run.jsonl -- build/examples/timer_int 3
+machinelab run --headless --dump-frame build/frame.ppm -- build/examples/vbe_rectangle
+machinelab run --headless --audio-wav build/audio.wav -- build/examples/audio_tone
 ```
 
 ## SDL Controls
@@ -73,7 +73,7 @@ captured frames. Capture markers omit quiet sections from videos without
 changing the guest timeline; `out` and `in` are accepted short aliases.
 
 ```sh
-lcom replay scripts/flappy_caption_demo.lcomscript --headless \
+machinelab replay scripts/flappy_caption_demo.mlabscript --headless \
   --video build/flappy.mp4 --video-fps 30 -- build/examples/flappy_bird
 ```
 
@@ -84,7 +84,7 @@ timelines.
 ## Paired Runtimes
 
 ```sh
-lcom run-pair build/examples/ninjix --right build/examples/ninjix
+machinelab run-pair build/examples/ninjix --right build/examples/ninjix
 ```
 
 The left and right programs have separate machines, processes, input, display,
@@ -95,8 +95,8 @@ deterministic input streams.
 ## Bundles
 
 ```sh
-lcom bundle . --program build/examples/flappy_bird --name flappy-bird
-./dist/flappy-bird.lcom
+machinelab bundle . --program build/examples/flappy_bird --name flappy-bird
+./dist/flappy-bird.mlab
 ```
 
 The default single-file bundle is directly executable. `--format dir` produces
@@ -107,7 +107,7 @@ cross-compiler.
 ## Shell Completion
 
 ```sh
-lcom completion bash > lcom.bash
-lcom completion zsh > _lcom
-lcom completion fish > lcom.fish
+machinelab completion bash > machinelab.bash
+machinelab completion zsh > _machinelab
+machinelab completion fish > machinelab.fish
 ```

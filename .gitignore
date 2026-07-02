@@ -12,3 +12,9 @@ compile_commands.json
 *.dSYM/
 .vscode/c_cpp_properties.json
 .cache/
+node_modules/
+docs-site/.vitepress/cache/
+docs-site/.vitepress/dist/
+docs-site/public/assets/
+media/remotion/out/
+media/remotion/public/

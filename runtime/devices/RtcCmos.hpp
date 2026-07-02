@@ -1,5 +1,5 @@
-#ifndef LCOM_NG_RTC_CMOS_HPP
-#define LCOM_NG_RTC_CMOS_HPP
+#ifndef MACHINE_LAB_RTC_CMOS_HPP
+#define MACHINE_LAB_RTC_CMOS_HPP
 
 #include "../core/PortDevice.hpp"
 

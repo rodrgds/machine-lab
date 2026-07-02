@@ -2,7 +2,7 @@
 
 #include "lcom_protocol.h"
 #include "../backends/HeadlessDisplay.hpp"
-#if defined(LCOM_WITH_SDL)
+#if defined(MACHINE_LAB_WITH_SDL)
 #include "../backends/SdlBackend.hpp"
 #endif
 
@@ -104,7 +104,7 @@ PairRuntimeServer::~PairRuntimeServer() {
 int PairRuntimeServer::run() {
   if (!setup()) return 1;
 
-  std::cout << "Starting paired LCOMBus instances...\n"
+  std::cout << "Starting paired Machine Lab bus instances...\n"
             << "  left  COM1/COM2 bridged to right COM1/COM2\n"
             << "  right COM1/COM2 bridged to left COM1/COM2\n";
 
@@ -245,13 +245,13 @@ bool PairRuntimeServer::setup() {
 
 bool PairRuntimeServer::setupSlot(Slot &slot) {
   if (slot.program.empty()) {
-    std::cerr << "lcom: run-pair missing " << slot.name << " program\n";
+    std::cerr << "machinelab: run-pair missing " << slot.name << " program\n";
     return false;
   }
   if (!slot.script_path.empty()) {
     std::string error;
     if (!slot.script.load(slot.script_path, error)) {
-      std::cerr << "lcom: " << slot.name << ": " << error << "\n";
+      std::cerr << "machinelab: " << slot.name << ": " << error << "\n";
       return false;
     }
   }
@@ -262,7 +262,7 @@ bool PairRuntimeServer::setupDisplay(Slot &slot) {
   if (options_.display == "headless") {
     slot.display.reset(new HeadlessDisplay());
   } else if (options_.display == "sdl") {
-#if defined(LCOM_WITH_SDL)
+#if defined(MACHINE_LAB_WITH_SDL)
     SdlBackendOptions sdl_options;
     sdl_options.fullscreen = options_.fullscreen;
     sdl_options.integer_scale = options_.integer_scale;
@@ -271,16 +271,16 @@ bool PairRuntimeServer::setupDisplay(Slot &slot) {
     sdl_options.title = "LCOM Pair - " + slot.name;
     slot.display = createSdlBackend(sdl_options);
 #else
-    std::cerr << "lcom: SDL backend requested but this build was compiled without SDL3\n";
+    std::cerr << "machinelab: SDL backend requested but this build was compiled without SDL3\n";
     return false;
 #endif
   } else {
-    std::cerr << "lcom: unknown display backend '" << options_.display << "'\n";
+    std::cerr << "machinelab: unknown display backend '" << options_.display << "'\n";
     return false;
   }
 
   if (slot.display != nullptr && !slot.display->start(slot.machine)) {
-    std::cerr << "lcom: " << slot.name << " display backend failed to start\n";
+    std::cerr << "machinelab: " << slot.name << " display backend failed to start\n";
     return false;
   }
   return true;
@@ -339,9 +339,14 @@ bool PairRuntimeServer::startChild(Slot &slot) {
 
     char fd_buf[32];
     std::snprintf(fd_buf, sizeof(fd_buf), "%d", sv[1]);
+    setenv("MACHINE_LAB_RUN_FD", fd_buf, 1);
     setenv("LCOM_RUN_FD", fd_buf, 1);
+    setenv("MACHINE_LAB_PAIR_SIDE", slot.name.c_str(), 1);
     setenv("LCOM_PAIR_SIDE", slot.name.c_str(), 1);
-    if (options_.headless) setenv("LCOM_PAIR_AUTO", "1", 1);
+    if (options_.headless) {
+      setenv("MACHINE_LAB_PAIR_AUTO", "1", 1);
+      setenv("LCOM_PAIR_AUTO", "1", 1);
+    }
 
     std::vector<char *> argv;
     argv.reserve(slot.program.size() + 1);
@@ -558,7 +563,7 @@ void PairRuntimeServer::maybeSatisfyEventWait(Slot &slot) {
 
 void PairRuntimeServer::advanceAllOnce() {
   if (left_.machine.tick() >= options_.max_ticks || right_.machine.tick() >= options_.max_ticks) {
-    std::cerr << "lcom: run-pair max virtual ticks reached (" << options_.max_ticks << ")\n";
+    std::cerr << "machinelab: run-pair max virtual ticks reached (" << options_.max_ticks << ")\n";
     cleanupSlot(left_);
     cleanupSlot(right_);
     return;

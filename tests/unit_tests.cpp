@@ -318,7 +318,7 @@ static void test_ac97_registers_and_buffer() {
 }
 
 static void test_script_time_and_demo_events() {
-  const char *path = "/tmp/lcom-ng-script-unit.lcomscript";
+  const char *path = "/tmp/machine-lab-script-unit.mlabscript";
   {
     std::ofstream out(path);
     out << "at 1s caption top 2s HELLO LEVEL 1\n";

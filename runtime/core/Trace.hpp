@@ -1,5 +1,5 @@
-#ifndef LCOM_NG_TRACE_HPP
-#define LCOM_NG_TRACE_HPP
+#ifndef MACHINE_LAB_TRACE_HPP
+#define MACHINE_LAB_TRACE_HPP
 
 #include <cstdint>
 #include <fstream>

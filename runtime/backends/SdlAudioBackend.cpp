@@ -1,4 +1,4 @@
-#if defined(LCOM_WITH_SDL)
+#if defined(MACHINE_LAB_WITH_SDL)
 
 #include "SdlAudioBackend.hpp"
 

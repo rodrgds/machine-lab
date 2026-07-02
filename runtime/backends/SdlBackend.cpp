@@ -1,4 +1,4 @@
-#if defined(LCOM_WITH_SDL)
+#if defined(MACHINE_LAB_WITH_SDL)
 
 #include "SdlBackend.hpp"
 
@@ -30,7 +30,10 @@ bool fileExists(const char *path) {
 }
 
 std::string findFontPath() {
-  const char *env = std::getenv("LCOM_FONT");
+  const char *env = std::getenv("MACHINE_LAB_FONT");
+  if (fileExists(env)) return env;
+
+  env = std::getenv("LCOM_FONT");
   if (fileExists(env)) return env;
 
   const char *candidates[] = {
@@ -133,10 +136,11 @@ public:
       title_font_ = TTF_OpenFont(font_path.c_str(), 15);
     }
     if (font_ == nullptr || title_font_ == nullptr) {
-      std::fprintf(stderr, "lcom: could not load a TTF font; set LCOM_FONT for SDL text\n");
+      std::fprintf(stderr,
+                   "machinelab: could not load a TTF font; set MACHINE_LAB_FONT for SDL text\n");
     }
 
-    terminal_lines_.push_back("LCOM Terminal");
+    terminal_lines_.push_back("Machine Lab Terminal");
     terminal_lines_.push_back("Press F3 for device state.");
     observed_machine_ = &machine;
     machine.setInputObserver(this);
@@ -513,7 +517,7 @@ private:
     };
 
     char buf[256];
-    line("LCOMBus Debug", rgba(113, 221, 237));
+    line("Machine Lab Debug", rgba(113, 221, 237));
     std::snprintf(buf, sizeof(buf), "tick: %llu", static_cast<unsigned long long>(machine.tick()));
     line(buf);
     std::snprintf(buf, sizeof(buf), "pending IRQ mask: 0x%08x", machine.pendingIrqs());
@@ -1044,7 +1048,7 @@ private:
     setMouseCaptured(false);
     if (save_path_input_.empty()) {
       std::ostringstream path;
-      path << "build/test-output/recording-" << machine.tick() << ".lcomscript";
+      path << "build/test-output/recording-" << machine.tick() << ".mlabscript";
       save_path_input_ = path.str();
     }
   }
@@ -1072,13 +1076,13 @@ private:
 
   void saveRecording() {
     std::filesystem::path path = save_path_input_.empty()
-                                     ? std::filesystem::path("lcom-recording.lcomscript")
+                                     ? std::filesystem::path("machinelab-recording.mlabscript")
                                      : std::filesystem::path(save_path_input_);
     std::error_code ec;
     if (path.has_parent_path()) std::filesystem::create_directories(path.parent_path(), ec);
     std::ofstream out(path);
     if (out.is_open()) {
-      out << "# lcom-ng recording\n";
+      out << "# Machine Lab recording\n";
       out << "# F8 writes capture out/in markers; skipped frames are intentionally absent from videos.\n";
       out << "# Ticks are virtual timer ticks; use `caption top 2s Text` or `caption bottom 2s Text`.\n";
       for (const auto &line : recording_lines_) out << line << "\n";

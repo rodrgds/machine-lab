@@ -1383,8 +1383,12 @@ static int app_init(app_t *app)
   app->tag = APP_SCREEN_EXIT;
   multiplayer_init(&app->multiplayer);
   app->multiplayer_level_id = LEVEL_FIRST_ID;
-  const char *pair_auto = getenv("LCOM_PAIR_AUTO");
-  const char *pair_side = getenv("LCOM_PAIR_SIDE");
+  const char *pair_auto = getenv("MACHINE_LAB_PAIR_AUTO");
+  const char *pair_side = getenv("MACHINE_LAB_PAIR_SIDE");
+  if (pair_auto == NULL || pair_auto[0] == '\0')
+    pair_auto = getenv("LCOM_PAIR_AUTO");
+  if (pair_side == NULL || pair_side[0] == '\0')
+    pair_side = getenv("LCOM_PAIR_SIDE");
   if (pair_auto != NULL && pair_auto[0] != '\0' && strcmp(pair_auto, "0") != 0)
   {
     if (pair_side != NULL && strcmp(pair_side, "left") == 0)

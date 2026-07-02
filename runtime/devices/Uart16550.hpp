@@ -1,5 +1,5 @@
-#ifndef LCOM_NG_UART16550_HPP
-#define LCOM_NG_UART16550_HPP
+#ifndef MACHINE_LAB_UART16550_HPP
+#define MACHINE_LAB_UART16550_HPP
 
 #include "../core/IrqController.hpp"
 #include "../core/PortDevice.hpp"

@@ -1,5 +1,5 @@
-#ifndef LCOM_NG_PAIR_RUNTIME_SERVER_HPP
-#define LCOM_NG_PAIR_RUNTIME_SERVER_HPP
+#ifndef MACHINE_LAB_PAIR_RUNTIME_SERVER_HPP
+#define MACHINE_LAB_PAIR_RUNTIME_SERVER_HPP
 
 #include "Machine.hpp"
 #include "Script.hpp"

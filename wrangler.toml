@@ -1,0 +1,4 @@
+"$schema" = "./node_modules/wrangler/config-schema.json"
+name = "machine-lab-docs"
+pages_build_output_dir = "docs-site/.vitepress/dist"
+compatibility_date = "2026-06-30"

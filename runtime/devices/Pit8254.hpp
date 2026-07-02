@@ -1,5 +1,5 @@
-#ifndef LCOM_NG_PIT8254_HPP
-#define LCOM_NG_PIT8254_HPP
+#ifndef MACHINE_LAB_PIT8254_HPP
+#define MACHINE_LAB_PIT8254_HPP
 
 #include "../core/IrqController.hpp"
 #include "../core/PortDevice.hpp"

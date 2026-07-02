@@ -2,7 +2,7 @@
 
 #include "lcom_protocol.h"
 #include "../backends/HeadlessDisplay.hpp"
-#if defined(LCOM_WITH_SDL)
+#if defined(MACHINE_LAB_WITH_SDL)
 #include "../backends/SdlAudioBackend.hpp"
 #include "../backends/SdlBackend.hpp"
 #endif
@@ -210,7 +210,7 @@ int RuntimeServer::run() {
 bool RuntimeServer::setup() {
   if (!options_.trace_path.empty()) {
     if (!trace_.open(options_.trace_path)) {
-      std::cerr << "lcom: could not open trace file " << options_.trace_path << "\n";
+      std::cerr << "machinelab: could not open trace file " << options_.trace_path << "\n";
       return false;
     }
     machine_.setTrace(&trace_);
@@ -219,14 +219,14 @@ bool RuntimeServer::setup() {
   if (!options_.script_path.empty()) {
     std::string error;
     if (!script_.load(options_.script_path, error)) {
-      std::cerr << "lcom: " << error << "\n";
+      std::cerr << "machinelab: " << error << "\n";
       return false;
     }
   }
 
   if (!options_.rtc_time.empty()) {
     if (!machine_.rtc().setIsoTime(options_.rtc_time)) {
-      std::cerr << "lcom: invalid RTC time '" << options_.rtc_time << "'\n";
+      std::cerr << "machinelab: invalid RTC time '" << options_.rtc_time << "'\n";
       return false;
     }
   }
@@ -244,7 +244,7 @@ bool RuntimeServer::setupDisplay() {
   if (options_.display == "headless") {
     display_.reset(new HeadlessDisplay());
   } else if (options_.display == "sdl") {
-#if defined(LCOM_WITH_SDL)
+#if defined(MACHINE_LAB_WITH_SDL)
     SdlBackendOptions sdl_options;
     sdl_options.fullscreen = options_.fullscreen;
     sdl_options.integer_scale = options_.integer_scale;
@@ -252,16 +252,16 @@ bool RuntimeServer::setupDisplay() {
     sdl_options.scale = options_.scale;
     display_ = createSdlBackend(sdl_options);
 #else
-    std::cerr << "lcom: SDL backend requested but this build was compiled without SDL3\n";
+    std::cerr << "machinelab: SDL backend requested but this build was compiled without SDL3\n";
     return false;
 #endif
   } else {
-    std::cerr << "lcom: unknown display backend '" << options_.display << "'\n";
+    std::cerr << "machinelab: unknown display backend '" << options_.display << "'\n";
     return false;
   }
 
   if (display_ != nullptr && !display_->start(machine_)) {
-    std::cerr << "lcom: display backend failed to start\n";
+    std::cerr << "machinelab: display backend failed to start\n";
     return false;
   }
 
@@ -274,22 +274,22 @@ bool RuntimeServer::setupAudio() {
   } else if (options_.audio == "null") {
     audio_.reset(new NullAudioBackend());
   } else if (options_.audio == "sdl") {
-#if defined(LCOM_WITH_SDL)
+#if defined(MACHINE_LAB_WITH_SDL)
     audio_ = createSdlAudioBackend();
 #else
-    std::cerr << "lcom: SDL audio requested but this build was compiled without SDL3\n";
+    std::cerr << "machinelab: SDL audio requested but this build was compiled without SDL3\n";
     return false;
 #endif
   } else if (options_.audio.rfind("wav:", 0) == 0) {
     audio_.reset(new WavAudioBackend(options_.audio.substr(4)));
   } else {
-    std::cerr << "lcom: unknown audio backend '" << options_.audio << "'\n";
+    std::cerr << "machinelab: unknown audio backend '" << options_.audio << "'\n";
     return false;
   }
 
   std::string error;
   if (audio_ != nullptr && !audio_->start(error)) {
-    std::cerr << "lcom: audio backend failed to start";
+    std::cerr << "machinelab: audio backend failed to start";
     if (!error.empty()) std::cerr << ": " << error;
     std::cerr << "\n";
     return false;
@@ -300,7 +300,7 @@ bool RuntimeServer::setupAudio() {
 bool RuntimeServer::setupSharedMemory() {
   shm_size_ = kAudioShmOffset + machine_.ac97().bufferSize();
   std::ostringstream name;
-  name << "/lcom-ng-" << getpid() << "-" << std::rand();
+  name << "/machine-lab-" << getpid() << "-" << std::rand();
   shm_name_ = name.str();
 
   shm_fd_ = shm_open(shm_name_.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
@@ -324,7 +324,7 @@ bool RuntimeServer::setupSharedMemory() {
 
 bool RuntimeServer::startChild() {
   if (options_.program.empty()) {
-    std::cerr << "lcom: no program specified\n";
+    std::cerr << "machinelab: no program specified\n";
     return false;
   }
 
@@ -358,6 +358,7 @@ bool RuntimeServer::startChild() {
 
     char fd_buf[32];
     std::snprintf(fd_buf, sizeof(fd_buf), "%d", sv[1]);
+    setenv("MACHINE_LAB_RUN_FD", fd_buf, 1);
     setenv("LCOM_RUN_FD", fd_buf, 1);
 
     std::vector<char *> argv;
@@ -383,7 +384,7 @@ bool RuntimeServer::startChild() {
   child_pid_ = static_cast<int>(pid);
   child_running_ = true;
 
-  std::cout << "Starting LCOMBus instance...\n"
+  std::cout << "Starting Machine Lab bus instance...\n"
             << "  PIT8254    ports 0x40-0x43  irq 0\n"
             << "  i8042      ports 0x60/0x64  irq 1/12\n"
             << "  RTC-CMOS   ports 0x70/0x71  irq 8\n"
@@ -590,7 +591,7 @@ bool RuntimeServer::updateAudioBackendFromDevice(bool was_playing, bool force_pl
                               machine_.ac97().channels(),
                               error);
   audio_backend_playing_ = ok;
-  if (!ok && !error.empty()) std::cerr << "lcom: audio play failed: " << error << "\n";
+  if (!ok && !error.empty()) std::cerr << "machinelab: audio play failed: " << error << "\n";
   return ok;
 }
 
@@ -626,7 +627,7 @@ void RuntimeServer::maybeSatisfyEventWait() {
 
 void RuntimeServer::advanceVirtualTimeOnce() {
   if (machine_.tick() >= options_.max_ticks) {
-    std::cerr << "lcom: max virtual ticks reached (" << options_.max_ticks << ")\n";
+    std::cerr << "machinelab: max virtual ticks reached (" << options_.max_ticks << ")\n";
     child_exit_status_ = 1;
     cleanupChild();
     return;
@@ -717,7 +718,7 @@ bool RuntimeServer::setupVideoCapture() {
     remove_frame_dir_ = false;
   } else {
     std::ostringstream dir;
-    dir << "/tmp/lcom-ng-video-" << getpid() << "-" << std::rand();
+    dir << "/tmp/machine-lab-video-" << getpid() << "-" << std::rand();
     active_frame_dir_ = dir.str();
     remove_frame_dir_ = true;
   }
@@ -725,7 +726,7 @@ bool RuntimeServer::setupVideoCapture() {
   std::error_code ec;
   std::filesystem::create_directories(active_frame_dir_, ec);
   if (ec) {
-    std::cerr << "lcom: could not create frame directory " << active_frame_dir_
+    std::cerr << "machinelab: could not create frame directory " << active_frame_dir_
               << ": " << ec.message() << "\n";
     return false;
   }
@@ -741,7 +742,7 @@ bool RuntimeServer::setupVideoCapture() {
     if (video.has_parent_path()) {
       std::filesystem::create_directories(video.parent_path(), ec);
       if (ec) {
-        std::cerr << "lcom: could not create video directory "
+        std::cerr << "machinelab: could not create video directory "
                   << video.parent_path().string() << ": " << ec.message() << "\n";
         return false;
       }
@@ -772,7 +773,7 @@ void RuntimeServer::dumpVideoFrame() {
 bool RuntimeServer::renderVideo() {
   if (options_.video_path.empty()) return true;
   if (frame_index_ == 0) {
-    std::cerr << "lcom: no frames were presented; cannot render video\n";
+    std::cerr << "machinelab: no frames were presented; cannot render video\n";
     return false;
   }
 
@@ -798,7 +799,7 @@ bool RuntimeServer::renderVideo() {
     return false;
   }
   if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-    std::cerr << "lcom: ffmpeg failed while rendering " << options_.video_path << "\n";
+    std::cerr << "machinelab: ffmpeg failed while rendering " << options_.video_path << "\n";
     return false;
   }
 

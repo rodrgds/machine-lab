@@ -1,5 +1,5 @@
-#ifndef LCOM_NG_SCRIPT_HPP
-#define LCOM_NG_SCRIPT_HPP
+#ifndef MACHINE_LAB_SCRIPT_HPP
+#define MACHINE_LAB_SCRIPT_HPP
 
 #include "Machine.hpp"
 

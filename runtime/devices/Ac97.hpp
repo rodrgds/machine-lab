@@ -1,5 +1,5 @@
-#ifndef LCOM_NG_AC97_DEVICE_HPP
-#define LCOM_NG_AC97_DEVICE_HPP
+#ifndef MACHINE_LAB_AC97_DEVICE_HPP
+#define MACHINE_LAB_AC97_DEVICE_HPP
 
 #include "../core/PortDevice.hpp"
 

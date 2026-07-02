@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "skills": {
+    "remotion": {
+      "source": "google-labs-code/stitch-skills",
+      "sourceType": "github",
+      "skillPath": "plugins/stitch-build/skills/remotion/SKILL.md",
+      "computedHash": "a6e000964fe70050b911fd2e2b028733353248571edbfe8da0973bd39cae8185"
+    },
+    "remotion-best-practices": {
+      "source": "remotion-dev/skills",
+      "sourceType": "github",
+      "skillPath": "skills/remotion/SKILL.md",
+      "computedHash": "14e4caa85e5c91d629e53397f94c9e8bb81460e93cafa31b278d14f5e9f640b7"
+    },
+    "remotion-video-director": {
+      "source": "bayramannakov/remotion-video-director",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "c79549378577a4f029ba2e1260936a9a34b3e3242e9933120961a2d6eda65993"
+    }
+  }
+}

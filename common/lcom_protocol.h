@@ -1,5 +1,5 @@
-#ifndef LCOM_NG_PROTOCOL_H
-#define LCOM_NG_PROTOCOL_H
+#ifndef MACHINE_LAB_PROTOCOL_H
+#define MACHINE_LAB_PROTOCOL_H
 
 #include <stdint.h>
 

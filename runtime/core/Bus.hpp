@@ -1,5 +1,5 @@
-#ifndef LCOM_NG_BUS_HPP
-#define LCOM_NG_BUS_HPP
+#ifndef MACHINE_LAB_BUS_HPP
+#define MACHINE_LAB_BUS_HPP
 
 #include "PortDevice.hpp"
 

@@ -1,5 +1,5 @@
-#ifndef LCOM_NG_IRQ_CONTROLLER_HPP
-#define LCOM_NG_IRQ_CONTROLLER_HPP
+#ifndef MACHINE_LAB_IRQ_CONTROLLER_HPP
+#define MACHINE_LAB_IRQ_CONTROLLER_HPP
 
 #include <array>
 #include <cstdint>

@@ -1,0 +1,139 @@
+name: Build And Release
+
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            asset: machinelab-linux-x86_64
+            shell: bash
+          - os: macos-13
+            asset: machinelab-macos-x86_64
+            shell: bash
+          - os: macos-14
+            asset: machinelab-macos-arm64
+            shell: bash
+          - os: windows-2025
+            asset: machinelab-windows-msys2-x86_64
+            shell: msys2 {0}
+
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build tar gzip
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install cmake ninja
+
+      - name: Set up MSYS2
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          update: true
+          install: >-
+            base-devel
+            gcc
+            cmake
+            ninja
+            tar
+            gzip
+            zip
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DMACHINE_LAB_WITH_SDL=OFF -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Package POSIX artifact
+        if: runner.os != 'Windows'
+        run: |
+          set -eu
+          package="${{ matrix.asset }}"
+          rm -rf "$package"
+          mkdir -p "$package/bin" "$package/examples" "$package/sdk" "$package/docs" "$package/scripts"
+          cp build/machinelab build/lowlab build/lcom "$package/bin/"
+          cp build/libmachinelab.a "$package/sdk/"
+          cp -R sdk/include "$package/sdk/include"
+          cp -R docs "$package/docs/project-docs"
+          cp -R course "$package/course"
+          cp -R scripts "$package/scripts"
+          find build/examples -maxdepth 1 -type f -perm -111 -exec cp {} "$package/examples/" \;
+          cp README.md "$package/"
+          tar -czf "$package.tar.gz" "$package"
+
+      - name: Package Windows artifact
+        if: runner.os == 'Windows'
+        run: |
+          set -eu
+          package="${{ matrix.asset }}"
+          rm -rf "$package"
+          mkdir -p "$package/bin" "$package/examples" "$package/sdk" "$package/docs" "$package/scripts"
+          cp build/machinelab.exe build/lowlab.exe build/lcom.exe "$package/bin/"
+          cp build/libmachinelab.a "$package/sdk/"
+          cp -R sdk/include "$package/sdk/include"
+          cp -R docs "$package/docs/project-docs"
+          cp -R course "$package/course"
+          cp -R scripts "$package/scripts"
+          find build/examples -maxdepth 1 -type f -name "*.exe" -exec cp {} "$package/examples/" \;
+          for exe in "$package/bin/machinelab.exe" "$package"/examples/*.exe; do
+            ldd "$exe" | awk '/\/usr\/bin\// { print $3 }' | while read -r dll; do
+              [ -n "$dll" ] && cp -n "$dll" "$package/bin/"
+            done
+          done
+          cp README.md "$package/"
+          tar -czf "$package.tar.gz" "$package"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/machinelab-*.tar.gz
+          generate_release_notes: true

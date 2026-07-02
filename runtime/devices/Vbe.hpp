@@ -1,5 +1,5 @@
-#ifndef LCOM_NG_VBE_HPP
-#define LCOM_NG_VBE_HPP
+#ifndef MACHINE_LAB_VBE_HPP
+#define MACHINE_LAB_VBE_HPP
 
 #include <cstddef>
 #include <cstdint>

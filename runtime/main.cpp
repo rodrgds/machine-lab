@@ -1,3 +1,5 @@
+#include "cli/LabCatalog.hpp"
+#include "cli/FileOps.hpp"
 #include "core/RuntimeServer.hpp"
 #include "core/PairRuntimeServer.hpp"
 
@@ -18,91 +20,20 @@ using lcom::RuntimeOptions;
 using lcom::RuntimeServer;
 using lcom::PairRuntimeOptions;
 using lcom::PairRuntimeServer;
-
-struct StudentLabSpec {
-  std::string id;
-  std::string dir;
-  std::string title;
-  std::vector<std::string> aliases;
-  std::vector<std::string> sources;
-  std::vector<std::string> functions;
-};
-
-static const std::vector<StudentLabSpec> &studentLabSpecs() {
-  static const std::vector<StudentLabSpec> specs = {
-      {"lab1", "rtc", "Bitwise helpers and RTC/CMOS", {"rtc", "bitwise"},
-       {"bitwise.c", "rtc_lab.c"},
-       {"uint8_t bit_clear(uint8_t value, uint8_t bit)",
-        "uint8_t bit_set(uint8_t value, uint8_t bit)",
-        "int bit_is_set(uint8_t value, uint8_t bit)",
-        "uint8_t bit_lsb(uint16_t value)",
-        "uint8_t bit_msb(uint16_t value)",
-        "uint8_t bit_mask(unsigned first_bit, ...)",
-        "int rtc_read_date(lcom_rtc_date_t *date)",
-        "int rtc_read_time(lcom_rtc_time_t *time)"}},
-      {"lab2", "timer", "i8254 PIT and IRQ0 timer events", {"timer", "pit"},
-       {"timer_lab.c"},
-       {"int timer_set_frequency(uint8_t timer, uint32_t freq)",
-        "int timer_get_conf(uint8_t timer, uint8_t *status)",
-        "int timer_subscribe(lcom_irq_t *irq)",
-        "int timer_unsubscribe(lcom_irq_t *irq)",
-        "void timer_ih(void)",
-        "uint32_t timer_ticks(void)"}},
-      {"lab3", "kbd", "i8042 keyboard and PS/2 scancodes", {"kbd", "keyboard", "kbc"},
-       {"keyboard_lab.c"},
-       {"int kbc_read_status(uint8_t *status)",
-        "int kbc_read_output(uint8_t *byte)",
-        "int kbc_write_command(uint8_t command)",
-        "int kbd_process_byte(uint8_t byte)",
-        "int kbd_get_scancode(uint8_t bytes[2], uint8_t *size, int *make)"}},
-      {"lab4", "mouse", "PS/2 mouse packets", {"mouse"},
-       {"mouse_lab.c"},
-       {"int mouse_enable_data_reporting(void)",
-        "int mouse_disable_data_reporting(void)",
-        "int mouse_process_byte(uint8_t byte)",
-        "int mouse_get_packet(mouse_packet_t *packet)"}},
-      {"lab5", "graphics", "VBE framebuffer graphics and XPM sprites", {"graphics", "video", "vbe"},
-       {"graphics_lab.c"},
-       {"int video_set_mode(uint16_t mode)",
-        "int video_map_framebuffer(void)",
-        "int video_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint32_t color)",
-        "int video_draw_xpm(const char *const *xpm, int16_t x, int16_t y)",
-        "int video_present(void)"}},
-      {"lab6", "audio", "AC97-lite PCM audio", {"audio", "sound"},
-       {"audio_lab.c"},
-       {"int audio_map_buffer(void)",
-        "int audio_fill_square_wave(uint32_t hz, uint32_t ms)",
-        "int audio_play(size_t byte_count)",
-        "int audio_stop(void)"}},
-      {"lab7", "uart", "16550 UART serial ports", {"uart", "serial"},
-       {"uart_lab.c"},
-       {"int uart_config(uint16_t base, uint32_t baud, uint8_t line_control)",
-        "int uart_enable_fifo(uint16_t base)",
-        "int uart_enable_rx_interrupt(uint16_t base)",
-        "int uart_set_loopback(uint16_t base, int enabled)",
-        "int uart_send_byte(uint16_t base, uint8_t byte)",
-        "int uart_read_byte(uint16_t base, uint8_t *byte)",
-        "int uart_subscribe(uint8_t irq, lcom_irq_t *out)",
-        "int uart_unsubscribe(lcom_irq_t *irq)"}},
-  };
-  return specs;
-}
-
-static const StudentLabSpec *studentLabSpec(const std::string &name) {
-  for (const StudentLabSpec &spec : studentLabSpecs()) {
-    if (name == spec.id || name == spec.dir) return &spec;
-    for (const std::string &alias : spec.aliases) {
-      if (name == alias) return &spec;
-    }
-  }
-  return nullptr;
-}
+using lcom::cli::StudentLabSpec;
+using lcom::cli::copyIfExists;
+using lcom::cli::copyTreeIfExists;
+using lcom::cli::makeExecutable;
+using lcom::cli::shellQuote;
+using lcom::cli::studentLabSpec;
+using lcom::cli::studentLabSpecs;
+using lcom::cli::writeTextFile;
 
 static void configureCliApp(CLI::App &app) {
-  app.description("lcom-ng userspace machine runtime");
+  app.description("Machine Lab userspace machine runtime");
   app.require_subcommand(0, 1);
 
-  auto *run = app.add_subcommand("run", "Run a student program inside the lcom-ng runtime");
+  auto *run = app.add_subcommand("run", "Run a student program inside the Machine Lab runtime");
   run->add_option("program", "Program and arguments after runtime options");
   run->add_flag("--headless", "Use deterministic headless display");
   run->add_option("--display", "Display backend: headless or sdl");
@@ -166,7 +97,7 @@ static void configureCliApp(CLI::App &app) {
   test->add_option("--project", "Student project directory (default: .)");
   test->add_flag("--keep-build", "Keep the temporary test build directory");
 
-  auto *bundle = app.add_subcommand("bundle", "Create a runnable lcom-ng app bundle");
+  auto *bundle = app.add_subcommand("bundle", "Create a runnable Machine Lab app bundle");
   bundle->add_option("project-dir", "Project directory")->required();
   bundle->add_option("--program", "Student binary to bundle")->required();
   bundle->add_option("--name", "Bundle/app name");
@@ -257,7 +188,7 @@ static int labList() {
 static int labShow(const std::string &lab) {
   const StudentLabSpec *spec = studentLabSpec(lab);
   if (spec == nullptr) {
-    std::cerr << "lcom: unknown lab " << lab << "\n";
+    std::cerr << "machinelab: unknown lab " << lab << "\n";
     return 1;
   }
   std::cout << spec->id << " (" << spec->dir << "): " << spec->title << "\n";
@@ -271,18 +202,18 @@ static int labShow(const std::string &lab) {
 static int cliDocs() {
   CLI::App app;
   configureCliApp(app);
-  std::cout << "# lcom CLI\n\n";
+  std::cout << "# machinelab CLI\n\n";
   std::cout << "```text\n" << app.help() << "```\n";
   std::cout << "\nCommon examples:\n\n";
   std::cout << "```sh\n";
-  std::cout << "lcom run build/examples/flappy_bird\n";
-  std::cout << "lcom run-pair --headless build/examples/uart_peer_sender --right build/examples/uart_peer_receiver\n";
-  std::cout << "lcom replay scripts/flappy_demo.lcomscript --headless --video build/flappy.mp4 -- build/examples/flappy_bird\n";
-  std::cout << "lcom replay scripts/ninjix_level1_demo.lcomscript --headless --video build/ninjix-demo.mp4 --video-fps 12 --max-ticks 3600 -- build/examples/ninjix\n";
-  std::cout << "lcom setup student\n";
-  std::cout << "lcom test rtc --project student\n";
-  std::cout << "lcom bundle . --program build/examples/flappy_bird --name flappy-bird\n";
-  std::cout << "lcom completion zsh > _lcom\n";
+  std::cout << "machinelab run build/examples/flappy_bird\n";
+  std::cout << "machinelab run-pair --headless build/examples/uart_peer_sender --right build/examples/uart_peer_receiver\n";
+  std::cout << "machinelab replay scripts/flappy_demo.mlabscript --headless --video build/flappy.mp4 -- build/examples/flappy_bird\n";
+  std::cout << "machinelab replay scripts/ninjix_level1_demo.mlabscript --headless --video build/ninjix-demo.mp4 --video-fps 12 --max-ticks 3600 -- build/examples/ninjix\n";
+  std::cout << "machinelab setup student\n";
+  std::cout << "machinelab test rtc --project student\n";
+  std::cout << "machinelab bundle . --program build/examples/flappy_bird --name flappy-bird\n";
+  std::cout << "machinelab completion zsh > _machinelab\n";
   std::cout << "```\n";
   return 0;
 }
@@ -306,7 +237,7 @@ static int completionScript(const std::string &shell) {
 
   if (shell == "bash") {
     std::cout
-        << "_lcom_complete() {\n"
+        << "_machinelab_complete() {\n"
         << "  local cur prev cmd\n"
         << "  COMPREPLY=()\n"
         << "  cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
@@ -322,13 +253,13 @@ static int completionScript(const std::string &shell) {
         << "    lab) COMPREPLY=( $(compgen -W \"list show " << lab_names << "\" -- \"$cur\") ) ;;\n"
         << "    completion) COMPREPLY=( $(compgen -W \"bash zsh fish\" -- \"$cur\") ) ;;\n"
         << "  esac\n"
-        << "}\ncomplete -F _lcom_complete lcom\n";
+        << "}\ncomplete -F _machinelab_complete machinelab\n";
     return 0;
   }
   if (shell == "zsh") {
     std::cout
-        << "#compdef lcom\n"
-        << "_lcom() {\n"
+        << "#compdef machinelab\n"
+        << "_machinelab() {\n"
         << "  local -a commands\n"
         << "  commands=(run run-pair replay setup test bundle lab docs completion help)\n"
         << "  if (( CURRENT == 2 )); then _describe 'command' commands; return; fi\n"
@@ -342,38 +273,38 @@ static int completionScript(const std::string &shell) {
         << "    lab) _arguments '1:action:(list show)' '2:lab:(rtc timer kbd mouse graphics audio uart lab1 lab2 lab3 lab4 lab5 lab6 lab7)' ;;\n"
         << "    completion) _arguments '1:shell:(bash zsh fish)' ;;\n"
         << "  esac\n"
-        << "}\n_lcom \"$@\"\n";
+        << "}\n_machinelab \"$@\"\n";
     return 0;
   }
   if (shell == "fish") {
     std::cout
-        << "complete -c lcom -f -n '__fish_use_subcommand' -a '" << commands << "'\n"
-        << "complete -c lcom -n '__fish_seen_subcommand_from run replay' -l display -r\n"
-        << "complete -c lcom -n '__fish_seen_subcommand_from run replay' -l audio -r\n"
-        << "complete -c lcom -n '__fish_seen_subcommand_from run replay' -l realtime\n"
-        << "complete -c lcom -n '__fish_seen_subcommand_from run replay' -l no-realtime\n"
-        << "complete -c lcom -n '__fish_seen_subcommand_from run' -l script -r\n"
-        << "complete -c lcom -n '__fish_seen_subcommand_from run replay' -l video -r\n"
-        << "complete -c lcom -n '__fish_seen_subcommand_from run-pair' -l left-script -r\n"
-        << "complete -c lcom -n '__fish_seen_subcommand_from run-pair' -l right-script -r\n"
-        << "complete -c lcom -n '__fish_seen_subcommand_from run-pair' -l max-ticks -r\n"
-        << "complete -c lcom -n '__fish_seen_subcommand_from run-pair' -l headless\n"
-        << "complete -c lcom -n '__fish_seen_subcommand_from run-pair' -l display -r\n"
-        << "complete -c lcom -n '__fish_seen_subcommand_from run-pair' -l realtime\n"
-        << "complete -c lcom -n '__fish_seen_subcommand_from run-pair' -l no-realtime\n"
-        << "complete -c lcom -n '__fish_seen_subcommand_from run-pair' -l right\n"
-        << "complete -c lcom -n '__fish_seen_subcommand_from setup' -l force\n"
-        << "complete -c lcom -n '__fish_seen_subcommand_from test' -l project -r\n"
-        << "complete -c lcom -n '__fish_seen_subcommand_from test' -l keep-build\n"
-        << "complete -c lcom -n '__fish_seen_subcommand_from test' -a 'rtc timer kbd mouse graphics audio uart lab1 lab2 lab3 lab4 lab5 lab6 lab7'\n"
-        << "complete -c lcom -n '__fish_seen_subcommand_from lab' -a 'list show rtc timer kbd mouse graphics audio uart lab1 lab2 lab3 lab4 lab5 lab6 lab7'\n"
-        << "complete -c lcom -n '__fish_seen_subcommand_from bundle' -l program -r\n"
-        << "complete -c lcom -n '__fish_seen_subcommand_from bundle' -l output -r\n"
-        << "complete -c lcom -n '__fish_seen_subcommand_from bundle' -l format -a 'single dir'\n"
-        << "complete -c lcom -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'\n";
+        << "complete -c machinelab -f -n '__fish_use_subcommand' -a '" << commands << "'\n"
+        << "complete -c machinelab -n '__fish_seen_subcommand_from run replay' -l display -r\n"
+        << "complete -c machinelab -n '__fish_seen_subcommand_from run replay' -l audio -r\n"
+        << "complete -c machinelab -n '__fish_seen_subcommand_from run replay' -l realtime\n"
+        << "complete -c machinelab -n '__fish_seen_subcommand_from run replay' -l no-realtime\n"
+        << "complete -c machinelab -n '__fish_seen_subcommand_from run' -l script -r\n"
+        << "complete -c machinelab -n '__fish_seen_subcommand_from run replay' -l video -r\n"
+        << "complete -c machinelab -n '__fish_seen_subcommand_from run-pair' -l left-script -r\n"
+        << "complete -c machinelab -n '__fish_seen_subcommand_from run-pair' -l right-script -r\n"
+        << "complete -c machinelab -n '__fish_seen_subcommand_from run-pair' -l max-ticks -r\n"
+        << "complete -c machinelab -n '__fish_seen_subcommand_from run-pair' -l headless\n"
+        << "complete -c machinelab -n '__fish_seen_subcommand_from run-pair' -l display -r\n"
+        << "complete -c machinelab -n '__fish_seen_subcommand_from run-pair' -l realtime\n"
+        << "complete -c machinelab -n '__fish_seen_subcommand_from run-pair' -l no-realtime\n"
+        << "complete -c machinelab -n '__fish_seen_subcommand_from run-pair' -l right\n"
+        << "complete -c machinelab -n '__fish_seen_subcommand_from setup' -l force\n"
+        << "complete -c machinelab -n '__fish_seen_subcommand_from test' -l project -r\n"
+        << "complete -c machinelab -n '__fish_seen_subcommand_from test' -l keep-build\n"
+        << "complete -c machinelab -n '__fish_seen_subcommand_from test' -a 'rtc timer kbd mouse graphics audio uart lab1 lab2 lab3 lab4 lab5 lab6 lab7'\n"
+        << "complete -c machinelab -n '__fish_seen_subcommand_from lab' -a 'list show rtc timer kbd mouse graphics audio uart lab1 lab2 lab3 lab4 lab5 lab6 lab7'\n"
+        << "complete -c machinelab -n '__fish_seen_subcommand_from bundle' -l program -r\n"
+        << "complete -c machinelab -n '__fish_seen_subcommand_from bundle' -l output -r\n"
+        << "complete -c machinelab -n '__fish_seen_subcommand_from bundle' -l format -a 'single dir'\n"
+        << "complete -c machinelab -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'\n";
     return 0;
   }
-  std::cerr << "lcom: unknown completion shell " << shell << "\n";
+  std::cerr << "machinelab: unknown completion shell " << shell << "\n";
   return 1;
 }
 
@@ -428,7 +359,7 @@ static bool parseRun(int argc, char **argv, int start, RuntimeOptions &opts) {
     } else if (arg == "--max-ticks" && i + 1 < argc) {
       opts.max_ticks = std::strtoull(argv[++i], nullptr, 10);
     } else if (!arg.empty() && arg[0] == '-') {
-      std::cerr << "lcom: unknown option " << arg << "\n";
+      std::cerr << "machinelab: unknown option " << arg << "\n";
       return false;
     } else {
       for (int j = i; j < argc; j++) opts.program.emplace_back(argv[j]);
@@ -489,7 +420,7 @@ static bool parseReplay(int argc, char **argv, int start, RuntimeOptions &opts) 
     } else if (arg == "--max-ticks" && i + 1 < argc) {
       opts.max_ticks = std::strtoull(argv[++i], nullptr, 10);
     } else if (!arg.empty() && arg[0] == '-') {
-      std::cerr << "lcom: unknown replay option " << arg << "\n";
+      std::cerr << "machinelab: unknown replay option " << arg << "\n";
       return false;
     } else if (!have_script) {
       opts.script_path = arg;
@@ -541,7 +472,7 @@ static bool parseRunPair(int argc, char **argv, int start, PairRuntimeOptions &o
     } else if (arg == "--max-ticks" && i + 1 < argc) {
       opts.max_ticks = std::strtoull(argv[++i], nullptr, 10);
     } else if (!arg.empty() && arg[0] == '-') {
-      std::cerr << "lcom: unknown run-pair option " << arg << "\n";
+      std::cerr << "machinelab: unknown run-pair option " << arg << "\n";
       return false;
     } else if (!right) {
       opts.left_program.emplace_back(arg);
@@ -554,7 +485,7 @@ static bool parseRunPair(int argc, char **argv, int start, PairRuntimeOptions &o
 
 static PairRuntimeOptions defaultPairRuntimeOptions() {
   PairRuntimeOptions opts;
-#if defined(LCOM_WITH_SDL)
+#if defined(MACHINE_LAB_WITH_SDL)
   opts.headless = false;
   opts.display = "sdl";
   opts.realtime = true;
@@ -573,7 +504,7 @@ static void applyRunDefaults(RuntimeOptions &opts) {
 
 static RuntimeOptions defaultRuntimeOptions() {
   RuntimeOptions opts;
-#if defined(LCOM_WITH_SDL)
+#if defined(MACHINE_LAB_WITH_SDL)
   opts.headless = false;
   opts.display = "sdl";
   opts.audio = "sdl";
@@ -592,13 +523,13 @@ static bool parseSetup(int argc, char **argv, int start, SetupOptions &opts) {
     if (arg == "--force") {
       opts.force = true;
     } else if (!arg.empty() && arg[0] == '-') {
-      std::cerr << "lcom: unknown setup option " << arg << "\n";
+      std::cerr << "machinelab: unknown setup option " << arg << "\n";
       return false;
     } else if (!have_project) {
       opts.project_dir = arg;
       have_project = true;
     } else {
-      std::cerr << "lcom: setup accepts at most one project directory\n";
+      std::cerr << "machinelab: setup accepts at most one project directory\n";
       return false;
     }
   }
@@ -614,13 +545,13 @@ static bool parseTest(int argc, char **argv, int start, TestOptions &opts) {
     } else if (arg == "--keep-build") {
       opts.keep_build = true;
     } else if (!arg.empty() && arg[0] == '-') {
-      std::cerr << "lcom: unknown test option " << arg << "\n";
+      std::cerr << "machinelab: unknown test option " << arg << "\n";
       return false;
     } else if (!have_lab) {
       opts.lab = arg;
       have_lab = true;
     } else {
-      std::cerr << "lcom: test accepts one lab name\n";
+      std::cerr << "machinelab: test accepts one lab name\n";
       return false;
     }
   }
@@ -629,7 +560,7 @@ static bool parseTest(int argc, char **argv, int start, TestOptions &opts) {
 
 static bool parseBundle(int argc, char **argv, int start, BundleOptions &opts) {
   if (start >= argc) {
-    std::cerr << "lcom: bundle requires <project-dir>\n";
+    std::cerr << "machinelab: bundle requires <project-dir>\n";
     return false;
   }
   opts.project_dir = argv[start++];
@@ -663,87 +594,24 @@ static bool parseBundle(int argc, char **argv, int start, BundleOptions &opts) {
     } else if (arg == "--single-file") {
       opts.format = "single";
     } else {
-      std::cerr << "lcom: unknown bundle option " << arg << "\n";
+      std::cerr << "machinelab: unknown bundle option " << arg << "\n";
       return false;
     }
   }
 
   if (opts.program.empty()) {
-    std::cerr << "lcom: bundle requires --program <binary>\n";
+    std::cerr << "machinelab: bundle requires --program <binary>\n";
     return false;
   }
   if (opts.format != "single" && opts.format != "dir") {
-    std::cerr << "lcom: bundle --format must be 'single' or 'dir'\n";
+    std::cerr << "machinelab: bundle --format must be 'single' or 'dir'\n";
     return false;
   }
   if (opts.name.empty()) opts.name = opts.program.filename().string();
   if (opts.output_path.empty()) {
-    opts.output_path = opts.project_dir / "dist" / (opts.name + ".lcom");
+    opts.output_path = opts.project_dir / "dist" / (opts.name + ".mlab");
   }
   return true;
-}
-
-static bool copyIfExists(const std::filesystem::path &from,
-                         const std::filesystem::path &to,
-                         std::string &error) {
-  std::error_code ec;
-  if (!std::filesystem::exists(from, ec)) return true;
-  std::filesystem::create_directories(to.parent_path(), ec);
-  if (ec) {
-    error = ec.message();
-    return false;
-  }
-  std::filesystem::copy_file(from, to, std::filesystem::copy_options::overwrite_existing, ec);
-  if (ec) {
-    error = ec.message();
-    return false;
-  }
-  return true;
-}
-
-static bool copyTreeIfExists(const std::filesystem::path &from,
-                             const std::filesystem::path &to,
-                             std::string &error) {
-  std::error_code ec;
-  if (!std::filesystem::exists(from, ec)) return true;
-  std::filesystem::create_directories(to, ec);
-  if (ec) {
-    error = ec.message();
-    return false;
-  }
-  std::filesystem::copy(from, to,
-                        std::filesystem::copy_options::recursive |
-                            std::filesystem::copy_options::overwrite_existing,
-                        ec);
-  if (ec) {
-    error = ec.message();
-    return false;
-  }
-  return true;
-}
-
-static void makeExecutable(const std::filesystem::path &path) {
-  std::error_code ec;
-  std::filesystem::permissions(path,
-                               std::filesystem::perms::owner_exec |
-                                   std::filesystem::perms::group_exec |
-                                   std::filesystem::perms::others_exec,
-                               std::filesystem::perm_options::add,
-                               ec);
-}
-
-static std::string shellQuote(const std::filesystem::path &path) {
-  std::string s = path.string();
-  std::string out = "'";
-  for (char c : s) {
-    if (c == '\'') {
-      out += "'\\''";
-    } else {
-      out.push_back(c);
-    }
-  }
-  out.push_back('\'');
-  return out;
 }
 
 static bool writeSingleFileBundle(const std::filesystem::path &stage,
@@ -780,7 +648,7 @@ static bool writeSingleFileBundle(const std::filesystem::path &stage,
   out << "#!/usr/bin/env sh\n"
       << "set -eu\n"
       << "tmp=${TMPDIR:-/tmp}\n"
-      << "dir=$(mktemp -d \"${tmp%/}/lcom-bundle.XXXXXX\")\n"
+      << "dir=$(mktemp -d \"${tmp%/}/machinelab-bundle.XXXXXX\")\n"
       << "cleanup() { rm -rf \"$dir\"; }\n"
       << "trap cleanup EXIT INT TERM\n"
       << "line=$(awk '/^__LCOM_BUNDLE_PAYLOAD__$/ { print NR + 1; exit }' \"$0\")\n"
@@ -811,11 +679,11 @@ static int createBundleDirectory(const BundleOptions &opts,
   fs::path project = fs::absolute(opts.project_dir);
   fs::path program = fs::absolute(opts.program);
   if (!fs::exists(project, ec) || !fs::is_directory(project, ec)) {
-    std::cerr << "lcom: project directory does not exist: " << project << "\n";
+    std::cerr << "machinelab: project directory does not exist: " << project << "\n";
     return 1;
   }
   if (!fs::exists(program, ec) || !fs::is_regular_file(program, ec)) {
-    std::cerr << "lcom: program does not exist: " << program << "\n";
+    std::cerr << "machinelab: program does not exist: " << program << "\n";
     return 1;
   }
 
@@ -824,7 +692,7 @@ static int createBundleDirectory(const BundleOptions &opts,
   fs::create_directories(output / "sdk" / "lib", ec);
   fs::create_directories(output / "scripts", ec);
   if (ec) {
-    std::cerr << "lcom: could not create bundle: " << ec.message() << "\n";
+    std::cerr << "machinelab: could not create bundle: " << ec.message() << "\n";
     return 1;
   }
 
@@ -834,7 +702,7 @@ static int createBundleDirectory(const BundleOptions &opts,
   fs::path bundled_program = output / "app" / program.filename();
   if (!copyIfExists(runtime, bundled_runtime, error) ||
       !copyIfExists(program, bundled_program, error)) {
-    std::cerr << "lcom: bundle copy failed: " << error << "\n";
+    std::cerr << "machinelab: bundle copy failed: " << error << "\n";
     return 1;
   }
   makeExecutable(bundled_runtime);
@@ -845,15 +713,19 @@ static int createBundleDirectory(const BundleOptions &opts,
     fs::path script = fs::absolute(opts.script);
     bundled_script = output / "scripts" / script.filename();
     if (!copyIfExists(script, bundled_script, error)) {
-      std::cerr << "lcom: script copy failed: " << error << "\n";
+      std::cerr << "machinelab: script copy failed: " << error << "\n";
       return 1;
     }
   }
 
-  copyTreeIfExists(fs::path(LCOM_SOURCE_DIR) / "include", output / "sdk" / "include", error);
-  fs::path static_lib = fs::path(LCOM_BINARY_DIR) / "liblcom-ng.a";
-  if (!fs::exists(static_lib, ec)) static_lib = fs::path(LCOM_BINARY_DIR) / "lib" / "liblcom-ng.a";
-  copyIfExists(static_lib, output / "sdk" / "lib" / "liblcom-ng.a", error);
+  copyTreeIfExists(fs::path(MACHINE_LAB_SOURCE_DIR) / "sdk" / "include",
+                   output / "sdk" / "include",
+                   error);
+  fs::path static_lib = fs::path(MACHINE_LAB_BINARY_DIR) / "libmachinelab.a";
+  if (!fs::exists(static_lib, ec)) static_lib = fs::path(MACHINE_LAB_BINARY_DIR) / "lib" / "libmachinelab.a";
+  if (!fs::exists(static_lib, ec)) static_lib = fs::path(MACHINE_LAB_BINARY_DIR) / "liblcom.a";
+  if (!fs::exists(static_lib, ec)) static_lib = fs::path(MACHINE_LAB_BINARY_DIR) / "liblowlab.a";
+  copyIfExists(static_lib, output / "sdk" / "lib" / "libmachinelab.a", error);
 
   std::string script_arg;
   if (!bundled_script.empty()) {
@@ -904,9 +776,9 @@ static int createBundleDirectory(const BundleOptions &opts,
   {
     std::ofstream out(output / "README.md");
     out << "# " << opts.name << "\n\n"
-        << "Run this bundled lcom-ng app with:\n\n"
+        << "Run this bundled Machine Lab app with:\n\n"
         << "```sh\n./run.sh\n```\n\n"
-        << "The `sdk/` directory contains the public headers and `liblcom-ng.a` when the bundle command can find it.\n";
+        << "The `sdk/` directory contains the public headers and `libmachinelab.a` when the bundle command can find it.\n";
   }
 
   return 0;
@@ -919,7 +791,7 @@ static int bundleProject(const BundleOptions &opts, const char *argv0) {
 
   if (opts.format == "dir") {
     int rc = createBundleDirectory(opts, argv0, output);
-    if (rc == 0) std::cout << "Created lcom bundle directory at " << output << "\n";
+    if (rc == 0) std::cout << "Created Machine Lab bundle directory at " << output << "\n";
     return rc;
   }
 
@@ -927,7 +799,7 @@ static int bundleProject(const BundleOptions &opts, const char *argv0) {
   fs::remove_all(stage, ec);
   fs::create_directories(stage, ec);
   if (ec) {
-    std::cerr << "lcom: could not create staging directory: " << ec.message() << "\n";
+    std::cerr << "machinelab: could not create staging directory: " << ec.message() << "\n";
     return 1;
   }
 
@@ -939,34 +811,13 @@ static int bundleProject(const BundleOptions &opts, const char *argv0) {
 
   std::string error;
   if (!writeSingleFileBundle(stage, output, error)) {
-    std::cerr << "lcom: could not create single-file bundle: " << error << "\n";
+    std::cerr << "machinelab: could not create single-file bundle: " << error << "\n";
     fs::remove_all(stage, ec);
     return 1;
   }
   fs::remove_all(stage, ec);
-  std::cout << "Created lcom bundle executable at " << output << "\n";
+  std::cout << "Created Machine Lab bundle executable at " << output << "\n";
   return 0;
-}
-
-static bool writeTextFile(const std::filesystem::path &path,
-                          const std::string &text,
-                          bool force,
-                          std::string &error) {
-  namespace fs = std::filesystem;
-  std::error_code ec;
-  if (!force && fs::exists(path, ec)) return true;
-  fs::create_directories(path.parent_path(), ec);
-  if (ec) {
-    error = ec.message();
-    return false;
-  }
-  std::ofstream out(path);
-  if (!out.is_open()) {
-    error = "could not open " + path.string();
-    return false;
-  }
-  out << text;
-  return true;
 }
 
 static std::string labStub(const std::string &lab, const std::string &source) {
@@ -1258,14 +1109,14 @@ int uart_unsubscribe(lcom_irq_t *irq) {
 
 static std::string studentMakefileText(const std::filesystem::path &root) {
   std::ostringstream out;
-  out << "LCOM_NG_ROOT ?= " << root.string() << "\n"
-      << "LCOM_NG_BUILD ?= $(LCOM_NG_ROOT)/build\n"
-      << "LCOM ?= lcom\n"
+  out << "MACHINELAB_ROOT ?= " << root.string() << "\n"
+      << "MACHINELAB_BUILD ?= $(MACHINELAB_ROOT)/build\n"
+      << "MACHINELAB ?= machinelab\n"
       << "CC ?= cc\n"
       << "BUILD_DIR := build\n"
       << "OBJ_DIR := $(BUILD_DIR)/obj\n"
-      << "LCOM_LIB := $(LCOM_NG_BUILD)/liblcom-ng.a\n"
-      << "CPPFLAGS += -Iinclude -Ilib -I$(LCOM_NG_ROOT)/include";
+      << "MACHINELAB_LIB := $(MACHINELAB_BUILD)/libmachinelab.a\n"
+      << "CPPFLAGS += -Iinclude -Ilib -I$(MACHINELAB_ROOT)/sdk/include";
   for (const StudentLabSpec &spec : studentLabSpecs()) {
     out << " -Ilabs/" << spec.dir << "/include";
   }
@@ -1286,14 +1137,14 @@ static std::string studentMakefileText(const std::filesystem::path &root) {
       << "all: proj\n\n"
       << "labs: $(LAB_OBJECTS)\n\n"
       << "proj: $(PROJ_BIN)\n\n"
-      << "$(PROJ_BIN): $(PROJ_OBJECTS) $(LAB_OBJECTS) $(LCOM_LIB)\n"
+      << "$(PROJ_BIN): $(PROJ_OBJECTS) $(LAB_OBJECTS) $(MACHINELAB_LIB)\n"
       << "\t@mkdir -p $(dir $@)\n"
-      << "\t$(CC) $(CFLAGS) -o $@ $(PROJ_OBJECTS) $(LAB_OBJECTS) $(LCOM_LIB)\n\n"
+      << "\t$(CC) $(CFLAGS) -o $@ $(PROJ_OBJECTS) $(LAB_OBJECTS) $(MACHINELAB_LIB)\n\n"
       << "$(OBJ_DIR)/%.o: %.c\n"
       << "\t@mkdir -p $(dir $@)\n"
       << "\t$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@\n\n"
       << "run: proj\n"
-      << "\t$(LCOM) run $(PROJ_BIN)\n\n"
+      << "\t$(MACHINELAB) run $(PROJ_BIN)\n\n"
       << "clean:\n"
       << "\trm -rf $(BUILD_DIR)\n";
   return out.str();
@@ -1346,10 +1197,44 @@ static std::string studentProjMainText() {
 
 int main(void) {
   if (lcom_init() != LCOM_OK) return 1;
-  lcom_printf("hello from the lcom-ng student project\n");
+  lcom_printf("hello from the Machine Lab student project\n");
   lcom_exit();
   return 0;
 }
+)";
+}
+
+static std::string studentWorkspaceReadmeText() {
+  return R"(# Machine Lab Student Workspace
+
+This is the workspace you edit for labs and projects. It was generated by
+`machinelab setup`.
+
+## Edit These
+
+- `labs/<device>/*_lab.c`: required lab implementations.
+- `lib/<device>/`: optional reusable helpers.
+- `proj/`: experiments and final-project code.
+- `Makefile`: build wiring, only when needed.
+
+## Usually Ignore These
+
+- `include/lcom/`: copied Machine Lab SDK headers; treat as read-only.
+- `.mlab/`: copied tests and generated test builds.
+- `build/`: generated object files and binaries.
+- upstream `runtime/`, `common/`, `.github/`: Machine Lab developer internals.
+
+## Commands
+
+```sh
+make
+machinelab test rtc
+machinelab test uart
+make run
+```
+
+The lab folders are `rtc`, `timer`, `kbd`, `mouse`, `graphics`, `audio`, and
+`uart`. You can also use `lab1` through `lab7` with `machinelab test`.
 )";
 }
 
@@ -1359,32 +1244,32 @@ static int setupStudentProject(const SetupOptions &opts) {
   fs::path project = fs::absolute(opts.project_dir);
   fs::create_directories(project, ec);
   if (ec) {
-    std::cerr << "lcom: could not create " << project << ": " << ec.message() << "\n";
+    std::cerr << "machinelab: could not create " << project << ": " << ec.message() << "\n";
     return 1;
   }
 
   std::string error;
-  if (!copyTreeIfExists(fs::path(LCOM_SOURCE_DIR) / "include" / "lcom",
+  if (!copyTreeIfExists(fs::path(MACHINE_LAB_SOURCE_DIR) / "sdk" / "include" / "lcom",
                         project / "include" / "lcom",
                         error) ||
-      !copyTreeIfExists(fs::path(LCOM_SOURCE_DIR) / "tests" / "labs",
-                        project / ".lcom" / "tests" / "labs",
+      !copyTreeIfExists(fs::path(MACHINE_LAB_SOURCE_DIR) / "dev" / "lab-tests",
+                        project / ".mlab" / "tests" / "labs",
                         error)) {
-    std::cerr << "lcom: setup copy failed: " << error << "\n";
+    std::cerr << "machinelab: setup copy failed: " << error << "\n";
     return 1;
   }
 
   for (const StudentLabSpec &spec : studentLabSpecs()) {
-    if (!copyTreeIfExists(fs::path(LCOM_SOURCE_DIR) / "labs" / "templates" / spec.id / "include",
+    if (!copyTreeIfExists(fs::path(MACHINE_LAB_SOURCE_DIR) / "course" / "labs" / "templates" / spec.id / "include",
                           project / "labs" / spec.dir / "include",
                           error)) {
-      std::cerr << "lcom: setup copy failed: " << error << "\n";
+      std::cerr << "machinelab: setup copy failed: " << error << "\n";
       return 1;
     }
     for (const std::string &source : spec.sources) {
       fs::path target = project / "labs" / spec.dir / source;
       if (!writeTextFile(target, labStub(spec.id, source), opts.force, error)) {
-        std::cerr << "lcom: setup write failed: " << error << "\n";
+        std::cerr << "machinelab: setup write failed: " << error << "\n";
         return 1;
       }
     }
@@ -1395,47 +1280,28 @@ static int setupStudentProject(const SetupOptions &opts) {
   for (const std::string &device : library_devices) {
     if (!writeTextFile(project / "lib" / device / (device + ".h"),
                        starterLibraryHeader(device), opts.force, error)) {
-      std::cerr << "lcom: setup write failed: " << error << "\n";
+      std::cerr << "machinelab: setup write failed: " << error << "\n";
       return 1;
     }
   }
 
   if (!writeTextFile(project / "proj" / "main.c", studentProjMainText(), opts.force, error)) {
-    std::cerr << "lcom: setup write failed: " << error << "\n";
+    std::cerr << "machinelab: setup write failed: " << error << "\n";
     return 1;
   }
-
-  std::ostringstream readme;
-  readme << "# lcom student labs\n\n"
-         << "This workspace was generated by `lcom setup`.\n\n"
-         << "- `include/lcom/` contains the public lcom-ng runtime/device headers.\n"
-         << "- `labs/<device>/include/` contains each tested lab API.\n"
-         << "- `labs/<device>/*_lab.c` contains TODO starter implementations that tests call directly.\n"
-         << "- `lib/<device>/` contains optional helper headers you can extend freely.\n"
-         << "- `proj/` contains a tiny app linked with the lab objects as libraries.\n"
-         << "- `Makefile` builds the starter app without requiring CMake.\n\n"
-         << "The lab folders are `rtc`, `timer`, `kbd`, `mouse`, `graphics`, `audio`, and `uart`.\n"
-         << "You can also use the old order names `lab1` through `lab7` with `lcom test`.\n\n"
-         << "Build and run tests with:\n\n"
-         << "```sh\n"
-         << "make\n"
-         << "lcom test rtc\n"
-         << "lcom test uart\n"
-         << "make run\n"
-         << "```\n";
 
   if (opts.force) {
     fs::remove(project / "CMakeLists.txt", ec);
   }
 
-  if (!writeTextFile(project / "Makefile", studentMakefileText(fs::path(LCOM_SOURCE_DIR)), opts.force, error) ||
-      !writeTextFile(project / "README.md", readme.str(), opts.force, error)) {
-    std::cerr << "lcom: setup write failed: " << error << "\n";
+  if (!writeTextFile(project / "Makefile", studentMakefileText(fs::path(MACHINE_LAB_SOURCE_DIR)), opts.force, error) ||
+      !writeTextFile(project / "README.md", studentWorkspaceReadmeText(), opts.force, error)) {
+    std::cerr << "machinelab: setup write failed: " << error << "\n";
     return 1;
   }
 
-  std::cout << "Created lcom student workspace at " << project << "\n";
-  std::cout << "Try: lcom test rtc --project " << project << "\n";
+  std::cout << "Created Machine Lab student workspace at " << project << "\n";
+  std::cout << "Try: machinelab test rtc --project " << project << "\n";
   return 0;
 }
 
@@ -1449,7 +1315,7 @@ static int runStudentLabTest(const TestOptions &opts, const char *argv0) {
   namespace fs = std::filesystem;
   const StudentLabSpec *spec = studentLabSpec(opts.lab);
   if (spec == nullptr) {
-    std::cerr << "lcom: unknown lab " << opts.lab << "\n";
+    std::cerr << "machinelab: unknown lab " << opts.lab << "\n";
     return 1;
   }
 
@@ -1457,30 +1323,32 @@ static int runStudentLabTest(const TestOptions &opts, const char *argv0) {
   fs::path project = fs::absolute(opts.project_dir);
   fs::path lab_dir = project / "labs" / spec->dir;
   if (!fs::exists(lab_dir, ec)) {
-    std::cerr << "lcom: " << spec->dir << " not found in " << project
-              << "; run `lcom setup` first\n";
+    std::cerr << "machinelab: " << spec->dir << " not found in " << project
+              << "; run `machinelab setup` first\n";
     return 1;
   }
   if (std::system("command -v ${CC:-cc} >/dev/null 2>&1") != 0) {
-    std::cerr << "lcom: no C compiler found on PATH; set CC or install cc/clang/gcc\n";
+    std::cerr << "machinelab: no C compiler found on PATH; set CC or install cc/clang/gcc\n";
     return 1;
   }
 
-  fs::path lcom_lib = fs::path(LCOM_BINARY_DIR) / "liblcom-ng.a";
-  if (!fs::exists(lcom_lib, ec)) lcom_lib = fs::path(LCOM_BINARY_DIR) / "lib" / "liblcom-ng.a";
+  fs::path lcom_lib = fs::path(MACHINE_LAB_BINARY_DIR) / "libmachinelab.a";
+  if (!fs::exists(lcom_lib, ec)) lcom_lib = fs::path(MACHINE_LAB_BINARY_DIR) / "lib" / "libmachinelab.a";
+  if (!fs::exists(lcom_lib, ec)) lcom_lib = fs::path(MACHINE_LAB_BINARY_DIR) / "liblcom.a";
+  if (!fs::exists(lcom_lib, ec)) lcom_lib = fs::path(MACHINE_LAB_BINARY_DIR) / "liblowlab.a";
   if (!fs::exists(lcom_lib, ec)) {
-    std::cerr << "lcom: could not find liblcom-ng.a under " << LCOM_BINARY_DIR
-              << "; build lcom-ng first\n";
+    std::cerr << "machinelab: could not find libmachinelab.a under " << MACHINE_LAB_BINARY_DIR
+              << "; build Machine Lab first\n";
     return 1;
   }
 
-  fs::path work_root = project / ".lcom" / "build" / spec->dir;
-  fs::path output_dir = project / ".lcom" / "test-output";
+  fs::path work_root = project / ".mlab" / "build" / spec->dir;
+  fs::path output_dir = project / ".mlab" / "test-output";
   fs::remove_all(work_root, ec);
   fs::create_directories(work_root, ec);
   fs::create_directories(output_dir, ec);
   if (ec) {
-    std::cerr << "lcom: could not prepare test build: " << ec.message() << "\n";
+    std::cerr << "machinelab: could not prepare test build: " << ec.message() << "\n";
     return 1;
   }
 
@@ -1489,12 +1357,12 @@ static int runStudentLabTest(const TestOptions &opts, const char *argv0) {
   fs::path binary = work_root / ("student_" + spec->id + "_test");
   std::ostringstream compile;
   compile << cc << " -std=c11 -Wall -Wextra -Wpedantic"
-          << " -I" << shellQuote(project / ".lcom" / "tests" / "labs")
+          << " -I" << shellQuote(project / ".mlab" / "tests" / "labs")
           << " -I" << shellQuote(project / "include")
           << " -I" << shellQuote(project / "lib")
           << " -I" << shellQuote(lab_dir / "include")
-          << " -I" << shellQuote(fs::path(LCOM_SOURCE_DIR) / "include")
-          << " " << shellQuote(project / ".lcom" / "tests" / "labs" / (spec->id + "_test.c"));
+          << " -I" << shellQuote(fs::path(MACHINE_LAB_SOURCE_DIR) / "sdk" / "include")
+          << " " << shellQuote(project / ".mlab" / "tests" / "labs" / (spec->id + "_test.c"));
   for (const std::string &source : spec->sources) {
     compile << " " << shellQuote(lab_dir / source);
   }
@@ -1509,9 +1377,9 @@ static int runStudentLabTest(const TestOptions &opts, const char *argv0) {
   if (spec->id == "lab1") {
     run += " --rtc 2026-06-16T12:34:56";
   } else if (spec->id == "lab3") {
-    run += " --script " + shellQuote(fs::path(LCOM_SOURCE_DIR) / "scripts" / "type_a_esc.lcomscript");
+    run += " --script " + shellQuote(fs::path(MACHINE_LAB_SOURCE_DIR) / "scripts" / "type_a_esc.mlabscript");
   } else if (spec->id == "lab4") {
-    run += " --script " + shellQuote(fs::path(LCOM_SOURCE_DIR) / "scripts" / "mouse_move.lcomscript");
+    run += " --script " + shellQuote(fs::path(MACHINE_LAB_SOURCE_DIR) / "scripts" / "mouse_move.mlabscript");
   } else if (spec->id == "lab5") {
     run += " --dump-frame " + shellQuote(output_dir / "graphics.ppm");
   } else if (spec->id == "lab6") {
@@ -1547,7 +1415,7 @@ int main(int argc, char **argv) {
 
   if (cmd == "run") {
     if (!parseRun(argc, argv, 2, opts)) {
-      std::cerr << "lcom: run requires <program> [args...]\n";
+      std::cerr << "machinelab: run requires <program> [args...]\n";
       subcommandUsage("run");
       return 1;
     }
@@ -1555,7 +1423,7 @@ int main(int argc, char **argv) {
   } else if (cmd == "run-pair") {
     PairRuntimeOptions pair = defaultPairRuntimeOptions();
     if (!parseRunPair(argc, argv, 2, pair)) {
-      std::cerr << "lcom: run-pair requires <left-program> [args...] --right <right-program> [args...]\n";
+      std::cerr << "machinelab: run-pair requires <left-program> [args...] --right <right-program> [args...]\n";
       subcommandUsage("run-pair");
       return 1;
     }
@@ -1563,7 +1431,7 @@ int main(int argc, char **argv) {
     return server.run();
   } else if (cmd == "replay") {
     if (!parseReplay(argc, argv, 2, opts)) {
-      std::cerr << "lcom: replay requires <script> <program> [args...]\n";
+      std::cerr << "machinelab: replay requires <script> <program> [args...]\n";
       subcommandUsage("replay");
       return 1;
     }
@@ -1580,7 +1448,7 @@ int main(int argc, char **argv) {
   } else if (cmd == "test") {
     TestOptions test;
     if (!parseTest(argc, argv, 2, test)) {
-      std::cerr << "lcom: test requires <lab>\n";
+      std::cerr << "machinelab: test requires <lab>\n";
       subcommandUsage("test");
       return 1;
     }
@@ -1594,12 +1462,12 @@ int main(int argc, char **argv) {
     return bundleProject(bundle, argv[0]);
   } else if (cmd == "docs") {
     if (argc >= 3 && std::string(argv[2]) == "cli") return cliDocs();
-    std::cerr << "lcom: docs requires a subcommand, e.g. 'cli'\n";
+    std::cerr << "machinelab: docs requires a subcommand, e.g. 'cli'\n";
     subcommandUsage("docs");
     return 1;
   } else if (cmd == "completion") {
     if (argc >= 3) return completionScript(argv[2]);
-    std::cerr << "lcom: completion requires <shell> (bash, zsh, or fish)\n";
+    std::cerr << "machinelab: completion requires <shell> (bash, zsh, or fish)\n";
     subcommandUsage("completion");
     return 1;
   } else if (cmd == "help" || cmd == "--help" || cmd == "-h") {
@@ -1608,11 +1476,11 @@ int main(int argc, char **argv) {
   } else if (cmd == "lab") {
     if (argc >= 3 && std::string(argv[2]) == "list") return labList();
     if (argc >= 4 && std::string(argv[2]) == "show") return labShow(argv[3]);
-    std::cerr << "lcom: lab requires 'list' or 'show <lab>'\n";
+    std::cerr << "machinelab: lab requires 'list' or 'show <lab>'\n";
     subcommandUsage("lab");
     return 1;
   } else {
-    std::cerr << "lcom: unknown command " << cmd << "\n";
+    std::cerr << "machinelab: unknown command " << cmd << "\n";
     usage();
     return 1;
   }

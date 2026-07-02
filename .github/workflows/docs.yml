@@ -1,0 +1,67 @@
+name: Docs Site
+
+on:
+  pull_request:
+    paths:
+      - "docs-site/**"
+      - "docs/**"
+      - "course/**"
+      - "scripts/check_docs_site.sh"
+      - "scripts/sync_docs_site_assets.sh"
+      - "package.json"
+      - "package-lock.json"
+      - "wrangler.toml"
+      - ".github/workflows/docs.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docs-site/**"
+      - "docs/**"
+      - "course/**"
+      - "scripts/check_docs_site.sh"
+      - "scripts/sync_docs_site_assets.sh"
+      - "package.json"
+      - "package-lock.json"
+      - "wrangler.toml"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  deployments: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run docs:build
+      - run: sh scripts/check_docs_site.sh
+
+  deploy_pages:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run docs:build
+
+      - name: Deploy to Cloudflare Pages
+        run: npx wrangler pages deploy docs-site/.vitepress/dist --project-name=machine-lab-docs --branch=main
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

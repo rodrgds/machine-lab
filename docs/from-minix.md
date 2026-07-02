@@ -1,4 +1,4 @@
-# From Minix And LCF To lcom-ng
+# From Minix And LCF To Machine Lab
 
 This comparison is based on the previous group implementation under
 `~/uni/lcom/MINIX/shared`: seven device labs and the Ninjix final project.
@@ -12,12 +12,12 @@ The old project mixed two kinds of work:
 2. Minix/LCF ceremony: service startup, IPC notification decoding, VM paths,
    wrapper logging, and restoring guest-driver state.
 
-`lcom-ng` retains the first category and replaces the second with a small
+`Machine Lab` retains the first category and replaces the second with a small
 portable runtime API.
 
 ## Direct Mapping
 
-| Previous Minix/LCF pattern | lcom-ng pattern | Learning status |
+| Previous Minix/LCF pattern | Machine Lab pattern | Learning status |
 | --- | --- | --- |
 | `lcf_start` / lab callback dispatch | normal `main` | removed ceremony |
 | `sef_startup` and service lifecycle | `lcom_init` / `lcom_exit` | simplified |
@@ -28,7 +28,7 @@ portable runtime API.
 | `vg_init` / LCF graphics helpers | VBE info, set mode, map, present | framebuffer work preserved |
 | `/home/lcom/labs/...` output paths | normal host paths/options | host-native |
 | manual VM input | live SDL or replay scripts | expanded |
-| two VMs and a serial/null-modem setup | `lcom run-pair` | protocol retained, setup removed |
+| two VMs and a serial/null-modem setup | `machinelab run-pair` | protocol retained, setup removed |
 
 ## What Students Still Learn
 
@@ -77,7 +77,7 @@ incidental prerequisite for every hardware lab.
 
 ## Trade-offs
 
-`lcom-ng` is an educational device model, not a general operating system. It
+`Machine Lab` is an educational device model, not a general operating system. It
 does not teach process servers, kernel/user privilege boundaries as implemented
 by Minix, real hardware timing, DMA, or physical bus discovery. The current
 devices intentionally model the parts exercised by the labs.

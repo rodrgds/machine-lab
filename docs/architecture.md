@@ -4,17 +4,17 @@
 
 ```text
 student C process
-  liblcom-ng client
+  libmachinelab client
         | local protocol
         v
-  lcom runtime server
+  machinelab runtime server
         |
         +-- bus and IRQ controller
         +-- virtual devices
         +-- headless or SDL/audio backend
 ```
 
-The student binary is a normal process linked with `liblcom-ng`. `lcom run`
+The student binary is a normal process linked with `libmachinelab`. `machinelab run`
 starts it with a local runtime channel and owns the virtual machine. Port reads,
 port writes, IRQ subscriptions, event waits, physical mappings, and VBE calls
 cross that boundary through a small protocol.
@@ -29,7 +29,8 @@ This separation is intentional:
 
 ## Public Student Surface
 
-`include/lcom/lcom.h` exposes:
+`sdk/include/lcom/lcom.h` is copied into student workspaces as
+`include/lcom/lcom.h` and exposes:
 
 - initialization and console output;
 - 8/16/32-bit port I/O;
@@ -75,5 +76,5 @@ otherwise unchanged.
 The complete gate is:
 
 ```sh
-lcom-test
+machinelab-test
 ```

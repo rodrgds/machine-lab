@@ -1,5 +1,5 @@
-#ifndef LCOM_NG_AUDIO_BACKEND_HPP
-#define LCOM_NG_AUDIO_BACKEND_HPP
+#ifndef MACHINE_LAB_AUDIO_BACKEND_HPP
+#define MACHINE_LAB_AUDIO_BACKEND_HPP
 
 #include <cstddef>
 #include <cstdint>

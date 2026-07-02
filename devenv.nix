@@ -18,50 +18,63 @@
     pkgs.dejavu_fonts
   ];
 
-  env.LCOM_FONT = "${pkgs.dejavu_fonts}/share/fonts/truetype/DejaVuSansMono.ttf";
+  env.MACHINE_LAB_FONT = "${pkgs.dejavu_fonts}/share/fonts/truetype/DejaVuSansMono.ttf";
 
-  scripts.lcom-configure.exec = ''
-    cmake -S . -B build -G Ninja -DLCOM_WITH_SDL=ON -DCMAKE_BUILD_TYPE=Debug
+  scripts.machinelab-configure.exec = ''
+    cmake -S . -B build -G Ninja -DMACHINE_LAB_WITH_SDL=ON -DCMAKE_BUILD_TYPE=Debug
   '';
 
-  scripts.lcom-build.exec = ''
-    cmake -S . -B build -G Ninja -DLCOM_WITH_SDL=ON -DCMAKE_BUILD_TYPE=Debug
+  scripts.machinelab-build.exec = ''
+    cmake -S . -B build -G Ninja -DMACHINE_LAB_WITH_SDL=ON -DCMAKE_BUILD_TYPE=Debug
     cmake --build build
   '';
 
-  scripts.lcom-test.exec = ''
-    cmake -S . -B build -G Ninja -DLCOM_WITH_SDL=ON -DCMAKE_BUILD_TYPE=Debug
+  scripts.machinelab-test.exec = ''
+    cmake -S . -B build -G Ninja -DMACHINE_LAB_WITH_SDL=ON -DCMAKE_BUILD_TYPE=Debug
     cmake --build build
     ctest --test-dir build --output-on-failure
   '';
 
-  scripts.lcom.exec = ''
-    if [ ! -x ./build/lcom ]; then
-      cmake -S . -B build -G Ninja -DLCOM_WITH_SDL=ON -DCMAKE_BUILD_TYPE=Debug
-      cmake --build build --target lcom
+  scripts.machinelab.exec = ''
+    if [ ! -x ./build/machinelab ]; then
+      cmake -S . -B build -G Ninja -DMACHINE_LAB_WITH_SDL=ON -DCMAKE_BUILD_TYPE=Debug
+      cmake --build build --target machinelab
     fi
-    exec ./build/lcom "$@"
+    exec ./build/machinelab "$@"
   '';
 
-  scripts.lcom-run-sdl.exec = ''
-    cmake -S . -B build -G Ninja -DLCOM_WITH_SDL=ON -DCMAKE_BUILD_TYPE=Debug
+  scripts.lcom.exec = ''
+    exec machinelab "$@"
+  '';
+
+  scripts.lowlab.exec = ''
+    exec machinelab "$@"
+  '';
+
+  scripts.mlab.exec = ''
+    exec machinelab "$@"
+  '';
+
+  scripts.machinelab-run-sdl.exec = ''
+    cmake -S . -B build -G Ninja -DMACHINE_LAB_WITH_SDL=ON -DCMAKE_BUILD_TYPE=Debug
     cmake --build build
-    build/lcom run build/examples/sdl_demo
+    build/machinelab run build/examples/sdl_demo
   '';
 
-  scripts.lcom-replay-flappy-video.exec = ''
-    cmake -S . -B build -G Ninja -DLCOM_WITH_SDL=ON -DCMAKE_BUILD_TYPE=Debug
+  scripts.machinelab-replay-flappy-video.exec = ''
+    cmake -S . -B build -G Ninja -DMACHINE_LAB_WITH_SDL=ON -DCMAKE_BUILD_TYPE=Debug
     cmake --build build
     mkdir -p build/replays
-    build/lcom replay scripts/flappy_demo.lcomscript --headless --video build/replays/flappy.mp4 -- build/examples/flappy_bird
+    build/machinelab replay scripts/flappy_demo.mlabscript --headless --video build/replays/flappy.mp4 -- build/examples/flappy_bird
   '';
 
   enterShell = ''
-    echo "lcom-ng dev shell"
-    echo "  lcom           run ./build/lcom, building it first when needed"
-    echo "  lcom-build     configure and build with SDL"
-    echo "  lcom-test      build and run tests"
-    echo "  lcom-run-sdl   run the interactive SDL demo"
-    echo "  lcom-replay-flappy-video render a deterministic Flappy replay MP4"
+    echo "Machine Lab dev shell"
+    echo "  machinelab           run ./build/machinelab, building it first when needed"
+    echo "  machinelab-build     configure and build with SDL"
+    echo "  machinelab-test      build and run tests"
+    echo "  machinelab-run-sdl   run the interactive SDL demo"
+    echo "  machinelab-replay-flappy-video render a deterministic Flappy replay MP4"
+    echo "  mlab/lowlab/lcom     compatibility aliases for machinelab"
   '';
 }
