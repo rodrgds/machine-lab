@@ -66,9 +66,14 @@ jobs:
             gzip
             zip
 
-      - name: Add MSYS2 FFmpeg to PATH
+      - name: Expose MSYS2 FFmpeg
         if: runner.os == 'Windows'
-        run: echo "C:\\msys64\\mingw64\\bin" >> "$GITHUB_PATH"
+        run: |
+          cat > /usr/bin/ffmpeg <<'EOF'
+          #!/usr/bin/env sh
+          PATH="/mingw64/bin:$PATH" exec /mingw64/bin/ffmpeg.exe "$@"
+          EOF
+          chmod +x /usr/bin/ffmpeg
 
       - name: Verify FFmpeg
         run: ffmpeg -version
