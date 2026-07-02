@@ -27,7 +27,7 @@ grep -q "Audience Boundaries" CONTRIBUTING.md
 test -f docs/index.md
 grep -q "Student-facing" docs/index.md
 test -f docs/adoption.md
-grep -q "one week" docs/adoption.md
+grep -qi "one week" docs/adoption.md
 test -f docs-site/index.md
 test -f docs-site/.vitepress/config.mts
 test -f docs-site/labs/lab1/tasks.md
