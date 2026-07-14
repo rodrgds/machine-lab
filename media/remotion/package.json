@@ -7,7 +7,7 @@
     "assets": "sh scripts/sync_assets.sh",
     "studio": "npm run assets && remotion studio src/index.ts",
     "still": "npm run assets && remotion still src/index.ts MachineLabAnnouncement out/frame.png --frame=450 --image-format=png",
-    "render": "npm run assets && remotion render src/index.ts MachineLabAnnouncement ../../docs/assets/demo/machine-lab-90s.mp4 --codec=h264 --crf=18 --muted"
+    "render": "npm run assets && remotion render src/index.ts MachineLabAnnouncement ../../docs/assets/demo/machine-lab-demo.mp4 --codec=h264 --audio-codec=aac --crf=18"
   },
   "dependencies": {
     "@remotion/cli": "4.0.484",

@@ -1,3 +1,13 @@
-at 1 text HELLO MACHINELAB
-at 20 key ESC down
-at 21 key ESC up
+at 1 text Machine Lab notes
+at 38 key ENTER down
+at 39 key ENTER up
+at 44 text Portable C, visible results.
+at 104 key ENTER down
+at 105 key ENTER up
+at 110 text Tests, traces, screenshots, sound.
+at 184 key LCTRL down
+at 185 key S down
+at 186 key S up
+at 187 key LCTRL up
+at 198 key ESC down
+at 199 key ESC up
