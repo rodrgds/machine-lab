@@ -57,7 +57,7 @@ test -s docs/assets/screenshots/word-processor.png
 test -s docs/assets/screenshots/music-maker.png
 test -s docs/assets/screenshots/breakout.png
 test -s docs/assets/screenshots/flappy.png
-test -s docs/assets/demo/machine-lab-90s.mp4
+test -s docs/assets/demo/machine-lab-demo.mp4
 for lab_doc in course/labs/docs/lab*.md; do
   grep -q "\\[!IMPORTANT\\]" "$lab_doc"
   grep -q "\\[!TIP\\]" "$lab_doc"
@@ -164,25 +164,19 @@ grep -q "uart rx L" "$OUT_DIR/uart.txt"
 "$CLI" run --headless -- "$EX_DIR/uart_pair" > "$OUT_DIR/uart_pair.txt"
 grep -q "uart pair LCOM" "$OUT_DIR/uart_pair.txt"
 
-uart_pair_ok=0
-for attempt in 1 2 3; do
-  "$CLI" run-pair --headless "$EX_DIR/uart_peer_sender" --right "$EX_DIR/uart_peer_receiver" --max-ticks 5000 > "$OUT_DIR/run_pair_uart.txt" 2>&1 || true
-  if grep -q "peer receiver got PAIR" "$OUT_DIR/run_pair_uart.txt" &&
-     grep -q "\\[left\\] Program exited with status 0" "$OUT_DIR/run_pair_uart.txt" &&
-     grep -q "\\[right\\] Program exited with status 0" "$OUT_DIR/run_pair_uart.txt" &&
-     ! grep -q "max virtual ticks reached" "$OUT_DIR/run_pair_uart.txt"; then
-    uart_pair_ok=1
-    break
-  fi
-  cp "$OUT_DIR/run_pair_uart.txt" "$OUT_DIR/run_pair_uart_attempt_$attempt.txt"
-done
-if [ "$uart_pair_ok" != "1" ]; then
-  cat "$OUT_DIR/run_pair_uart.txt" >&2
-  exit 1
-fi
+"$CLI" run-pair --headless "$EX_DIR/uart_peer_sender" --right "$EX_DIR/uart_peer_receiver" --max-ticks 5000 > "$OUT_DIR/run_pair_uart.txt" 2>&1
 grep -q "peer receiver got PAIR" "$OUT_DIR/run_pair_uart.txt"
 grep -q "\\[left\\] Program exited with status 0" "$OUT_DIR/run_pair_uart.txt"
 grep -q "\\[right\\] Program exited with status 0" "$OUT_DIR/run_pair_uart.txt"
+! grep -q "max virtual ticks reached" "$OUT_DIR/run_pair_uart.txt"
+
+if "$CLI" run-pair --headless /usr/bin/false --right /usr/bin/false \
+    > "$OUT_DIR/run_pair_failure.txt" 2>&1; then
+  echo "run-pair must propagate guest failures" >&2
+  exit 1
+fi
+grep -q "\\[left\\] Program exited with status 1" "$OUT_DIR/run_pair_failure.txt"
+grep -q "\\[right\\] Program exited with status 1" "$OUT_DIR/run_pair_failure.txt"
 
 "$CLI" run-pair --headless "$EX_DIR/ninjix" --right "$EX_DIR/ninjix" --max-ticks 900 > "$OUT_DIR/run_pair_ninjix.txt"
 grep -q "ninjix pair started as ATTACK" "$OUT_DIR/run_pair_ninjix.txt"
@@ -214,14 +208,31 @@ grep -q "audio tone" "$OUT_DIR/audio.txt"
 test -s "$OUT_DIR/tone.wav"
 head -c 4 "$OUT_DIR/tone.wav" | grep -q RIFF
 
+if "$CLI" run --headless --audio-wav "$OUT_DIR" -- "$EX_DIR/audio_tone" \
+    > "$OUT_DIR/audio_write_failure.txt" 2>&1; then
+  echo "audio output failures must fail the run" >&2
+  exit 1
+fi
+
+if "$CLI" run --headless --dump-frame "$OUT_DIR" -- "$EX_DIR/vbe_rectangle" \
+    > "$OUT_DIR/frame_write_failure.txt" 2>&1; then
+  echo "frame output failures must fail the run" >&2
+  exit 1
+fi
+
 "$CLI" run --headless --script scripts/write_note.mlabscript --dump-frame "$OUT_DIR/word_processor.ppm" -- "$EX_DIR/word_processor" > "$OUT_DIR/word_processor.txt"
-grep -q "word processor text HELLO MACHINELAB" "$OUT_DIR/word_processor.txt"
+grep -q "word processor text Machine Lab notes" "$OUT_DIR/word_processor.txt"
+grep -q "Portable C, visible results." "$OUT_DIR/word_processor.txt"
+grep -q "Tests, traces, screenshots, sound." "$OUT_DIR/word_processor.txt"
 test -s "$OUT_DIR/word_processor.ppm"
 
 "$CLI" run --headless --script scripts/music_maker_demo.mlabscript --audio-wav "$OUT_DIR/music_maker.wav" --dump-frame "$OUT_DIR/music_maker.ppm" -- "$EX_DIR/music_maker" > "$OUT_DIR/music_maker.txt"
-grep -q "music maker pattern tracks=3 steps=16 active=" "$OUT_DIR/music_maker.txt"
+grep -q "music maker pattern tracks=4 steps=16 active=" "$OUT_DIR/music_maker.txt"
+grep -Eq "submitted=([2-9]|[1-9][0-9]+)" "$OUT_DIR/music_maker.txt"
 test -s "$OUT_DIR/music_maker.wav"
 head -c 4 "$OUT_DIR/music_maker.wav" | grep -q RIFF
+music_duration=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$OUT_DIR/music_maker.wav")
+awk -v duration="$music_duration" 'BEGIN { exit !(duration > 1.5) }'
 test -s "$OUT_DIR/music_maker.ppm"
 
 "$CLI" run --headless --script scripts/breakout_demo.mlabscript --dump-frame "$OUT_DIR/breakout_demo.ppm" -- "$EX_DIR/breakout_demo" > "$OUT_DIR/breakout_demo.txt"
