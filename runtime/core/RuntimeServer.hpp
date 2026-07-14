@@ -61,7 +61,7 @@ private:
   void syncAudioFromSharedMemory();
   void zeroSharedFramebuffer();
   bool setupVideoCapture();
-  void dumpVideoFrame();
+  bool dumpVideoFrame();
   bool renderVideo();
   void cleanupVideoCapture();
   bool setupDisplay();
@@ -99,6 +99,7 @@ private:
   uint32_t presented_frame_index_ = 0;
   uint32_t capture_frame_stride_ = 1;
   bool video_capture_enabled_ = true;
+  bool artifact_failed_ = false;
   std::string caption_text_;
   std::string caption_position_ = "bottom";
   uint64_t caption_until_tick_ = 0;

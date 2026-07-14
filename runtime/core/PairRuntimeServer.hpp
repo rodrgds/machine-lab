@@ -46,6 +46,7 @@ private:
     int child_stdout = -1;
     int child_stderr = -1;
     int child_pid = -1;
+    int exit_status = 0;
     bool child_running = false;
     bool waiting_event = false;
     uint32_t waiting_request_id = 0;

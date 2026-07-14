@@ -666,7 +666,10 @@ static bool writeSingleFileBundle(const std::filesystem::path &stage,
   out << in.rdbuf();
   out.close();
   fs::remove(archive, ec);
-  makeExecutable(output);
+  if (!makeExecutable(output, error)) {
+    std::cerr << "machinelab: " << error << "\n";
+    return false;
+  }
   return true;
 }
 
@@ -705,8 +708,11 @@ static int createBundleDirectory(const BundleOptions &opts,
     std::cerr << "machinelab: bundle copy failed: " << error << "\n";
     return 1;
   }
-  makeExecutable(bundled_runtime);
-  makeExecutable(bundled_program);
+  if (!makeExecutable(bundled_runtime, error) ||
+      !makeExecutable(bundled_program, error)) {
+    std::cerr << "machinelab: " << error << "\n";
+    return 1;
+  }
 
   fs::path bundled_script;
   if (!opts.script.empty()) {
@@ -718,14 +724,19 @@ static int createBundleDirectory(const BundleOptions &opts,
     }
   }
 
-  copyTreeIfExists(fs::path(MACHINE_LAB_SOURCE_DIR) / "sdk" / "include",
-                   output / "sdk" / "include",
-                   error);
+  if (!copyTreeIfExists(fs::path(MACHINE_LAB_SOURCE_DIR) / "sdk" / "include",
+                        output / "sdk" / "include", error)) {
+    std::cerr << "machinelab: bundle SDK copy failed: " << error << "\n";
+    return 1;
+  }
   fs::path static_lib = fs::path(MACHINE_LAB_BINARY_DIR) / "libmachinelab.a";
   if (!fs::exists(static_lib, ec)) static_lib = fs::path(MACHINE_LAB_BINARY_DIR) / "lib" / "libmachinelab.a";
   if (!fs::exists(static_lib, ec)) static_lib = fs::path(MACHINE_LAB_BINARY_DIR) / "liblcom.a";
   if (!fs::exists(static_lib, ec)) static_lib = fs::path(MACHINE_LAB_BINARY_DIR) / "liblowlab.a";
-  copyIfExists(static_lib, output / "sdk" / "lib" / "libmachinelab.a", error);
+  if (!copyIfExists(static_lib, output / "sdk" / "lib" / "libmachinelab.a", error)) {
+    std::cerr << "machinelab: bundle library copy failed: " << error << "\n";
+    return 1;
+  }
 
   std::string script_arg;
   if (!bundled_script.empty()) {
@@ -744,7 +755,10 @@ static int createBundleDirectory(const BundleOptions &opts,
         << "DIR=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n"
         << "exec \"$DIR/bin/" << bundled_runtime.filename().string() << "\" " << run_args << "\n";
   }
-  makeExecutable(run_sh);
+  if (!makeExecutable(run_sh, error)) {
+    std::cerr << "machinelab: " << error << "\n";
+    return 1;
+  }
 
   fs::path run_bat = output / "run.bat";
   {

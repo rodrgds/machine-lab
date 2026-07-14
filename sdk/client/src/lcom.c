@@ -86,7 +86,7 @@ static int request_reply(uint16_t req_type,
     if (recv_msg(&hdr, buf, sizeof(buf)) != 0) return -1;
     if (hdr.request_id != request_id) continue;
     if (hdr.type != reply_type) return -1;
-    if (hdr.size > reply_capacity) return -1;
+    if (hdr.size != reply_capacity) return -1;
     memcpy(reply, buf, hdr.size);
     if (reply_size != NULL) *reply_size = hdr.size;
     return 0;
@@ -121,7 +121,7 @@ int lcom_init(void) {
     return LCOM_ERR;
   }
 
-  return reply.status == 0 ? LCOM_OK : LCOM_ERR;
+  return reply.status == 0 && reply.version == LCOM_PROTOCOL_VERSION ? LCOM_OK : LCOM_ERR;
 }
 
 void lcom_exit(void) {

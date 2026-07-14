@@ -44,6 +44,8 @@ private:
   size_t cursor_ = 0;
 };
 
+void injectText(Machine &machine, const std::string &text);
+
 } // namespace lcom
 
 #endif

@@ -12,7 +12,7 @@ bool copyIfExists(const std::filesystem::path &from,
 bool copyTreeIfExists(const std::filesystem::path &from,
                       const std::filesystem::path &to,
                       std::string &error);
-void makeExecutable(const std::filesystem::path &path);
+bool makeExecutable(const std::filesystem::path &path, std::string &error);
 std::string shellQuote(const std::filesystem::path &path);
 bool writeTextFile(const std::filesystem::path &path,
                    const std::string &text,

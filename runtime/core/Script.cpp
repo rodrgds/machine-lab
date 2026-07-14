@@ -61,6 +61,53 @@ static bool isCaptionPosition(const std::string &word) {
   return word == "top" || word == "bottom";
 }
 
+static void tapKey(Machine &machine, const std::string &key, bool shifted = false) {
+  if (shifted) machine.injectKey("LSHIFT", true);
+  machine.injectKey(key, true);
+  machine.injectKey(key, false);
+  if (shifted) machine.injectKey("LSHIFT", false);
+}
+
+void injectText(Machine &machine, const std::string &text) {
+  for (char c : text) {
+    if (c >= 'a' && c <= 'z') {
+      tapKey(machine, std::string(1, static_cast<char>(std::toupper(static_cast<unsigned char>(c)))));
+    } else if (c >= 'A' && c <= 'Z') {
+      tapKey(machine, std::string(1, c), true);
+    } else if (c >= '0' && c <= '9') {
+      tapKey(machine, std::string(1, c));
+    } else if (c == ' ') {
+      tapKey(machine, "SPACE");
+    } else if (c == '\n') {
+      tapKey(machine, "ENTER");
+    } else if (c == '-') {
+      tapKey(machine, "MINUS");
+    } else if (c == '=') {
+      tapKey(machine, "EQUALS");
+    } else if (c == ',') {
+      tapKey(machine, "COMMA");
+    } else if (c == '.') {
+      tapKey(machine, "PERIOD");
+    } else if (c == '/') {
+      tapKey(machine, "SLASH");
+    } else if (c == ';') {
+      tapKey(machine, "SEMICOLON");
+    } else if (c == '\'') {
+      tapKey(machine, "APOSTROPHE");
+    } else if (c == '[') {
+      tapKey(machine, "LEFTBRACKET");
+    } else if (c == ']') {
+      tapKey(machine, "RIGHTBRACKET");
+    } else if (c == '!') {
+      tapKey(machine, "1", true);
+    } else if (c == '?') {
+      tapKey(machine, "SLASH", true);
+    } else if (c == ':') {
+      tapKey(machine, "SEMICOLON", true);
+    }
+  }
+}
+
 bool Script::load(const std::string &path, std::string &error) {
   std::ifstream in(path);
   if (!in.is_open()) {
@@ -235,20 +282,7 @@ void Script::injectDue(Machine &machine, uint64_t tick) {
       machine.injectMouse(ev.dx, ev.dy, ev.buttons);
       break;
     case ScriptEvent::Kind::Text:
-      for (char c : ev.text) {
-        if (c >= 'a' && c <= 'z') {
-          std::string key(1, static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
-          machine.injectKey(key, true);
-          machine.injectKey(key, false);
-        } else if (c >= 'A' && c <= 'Z') {
-          std::string key(1, c);
-          machine.injectKey(key, true);
-          machine.injectKey(key, false);
-        } else if (c == ' ') {
-          machine.injectKey("SPACE", true);
-          machine.injectKey("SPACE", false);
-        }
-      }
+      injectText(machine, ev.text);
       break;
     case ScriptEvent::Kind::Rtc:
       machine.rtc().setIsoTime(ev.text);

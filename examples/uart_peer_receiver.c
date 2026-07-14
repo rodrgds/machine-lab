@@ -20,7 +20,7 @@ int main(void) {
 
   lcom_irq_t irq = {0};
   if (lcom_irq_subscribe(COM1_IRQ, 0, &irq) != LCOM_OK) return 1;
-  if (lcom_port_write8(COM1_BASE + SER_FCR, FCR_ENABLE_FIFO | FCR_CLEAR_RX | FCR_CLEAR_TX) != LCOM_OK) return 1;
+  if (lcom_port_write8(COM1_BASE + SER_FCR, FCR_ENABLE_FIFO) != LCOM_OK) return 1;
   if (lcom_port_write8(COM1_BASE + SER_IER, IER_RDA) != LCOM_OK) return 1;
   if (lcom_port_write8(COM1_BASE + SER_THR, 'R') != LCOM_OK) return 1;
 

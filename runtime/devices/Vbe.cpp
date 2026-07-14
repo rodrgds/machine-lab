@@ -159,7 +159,7 @@ bool Vbe::ownsRange(uint64_t phys, uint64_t length) const {
   if (length == 0) return false;
   uint64_t start = framebuffer_phys_;
   uint64_t end = start + framebuffer_.size();
-  return phys >= start && phys + length <= end;
+  return phys >= start && phys <= end && length <= end - phys;
 }
 
 bool Vbe::dumpPpm(const std::string &path, const std::string &caption,
@@ -167,7 +167,10 @@ bool Vbe::dumpPpm(const std::string &path, const std::string &caption,
   if (!graphics_mode_ || framebuffer_.empty()) return false;
   FILE *f = std::fopen(path.c_str(), "wb");
   if (f == nullptr) return false;
-  std::fprintf(f, "P6\n%u %u\n255\n", current_.width, current_.height);
+  if (std::fprintf(f, "P6\n%u %u\n255\n", current_.width, current_.height) < 0) {
+    std::fclose(f);
+    return false;
+  }
   for (uint16_t y = 0; y < current_.height; y++) {
     const uint8_t *row = framebuffer_.data() + static_cast<size_t>(y) * current_.pitch;
     for (uint16_t x = 0; x < current_.width; x++) {
@@ -186,11 +189,13 @@ bool Vbe::dumpPpm(const std::string &path, const std::string &caption,
         rgb[2] = px[0];
       }
       captionPixel(caption, caption_position, current_.width, current_.height, x, y, rgb);
-      std::fwrite(rgb, 1, sizeof(rgb), f);
+      if (std::fwrite(rgb, 1, sizeof(rgb), f) != sizeof(rgb)) {
+        std::fclose(f);
+        return false;
+      }
     }
   }
-  std::fclose(f);
-  return true;
+  return std::fclose(f) == 0;
 }
 
 } // namespace lcom

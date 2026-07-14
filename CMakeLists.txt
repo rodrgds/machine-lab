@@ -2,6 +2,13 @@ cmake_minimum_required(VERSION 3.20)
 
 project(machine-lab VERSION 0.2.0 LANGUAGES C CXX)
 
+file(READ ${CMAKE_CURRENT_SOURCE_DIR}/package.json MACHINE_LAB_PACKAGE_JSON)
+string(JSON MACHINE_LAB_PACKAGE_VERSION GET "${MACHINE_LAB_PACKAGE_JSON}" version)
+if(NOT MACHINE_LAB_PACKAGE_VERSION VERSION_EQUAL PROJECT_VERSION)
+  message(FATAL_ERROR
+    "package.json version ${MACHINE_LAB_PACKAGE_VERSION} does not match PROJECT_VERSION ${PROJECT_VERSION}")
+endif()
+
 option(MACHINE_LAB_WITH_SDL "Build the SDL3 desktop display/input backend" OFF)
 if(DEFINED LCOM_WITH_SDL)
   set(MACHINE_LAB_WITH_SDL "${LCOM_WITH_SDL}" CACHE BOOL
@@ -65,9 +72,28 @@ add_custom_command(TARGET machinelab_c POST_BUILD
 set(MACHINE_LAB_RUNTIME_SOURCES
   runtime/main.cpp
   runtime/cli/FileOps.cpp
-  runtime/cli/LabCatalog.cpp
+  ${CMAKE_CURRENT_BINARY_DIR}/generated/LabCatalog.cpp
   runtime/core/RuntimeServer.cpp
   runtime/core/PairRuntimeServer.cpp
+)
+
+set(LAB_CATALOG_JSON ${CMAKE_CURRENT_SOURCE_DIR}/course/labs/function-requests.json)
+set(LAB_CATALOG_GENERATOR ${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_lab_catalog.cmake)
+set(GENERATED_LAB_CATALOG ${CMAKE_CURRENT_BINARY_DIR}/generated/LabCatalog.cpp)
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/generated)
+execute_process(
+  COMMAND ${CMAKE_COMMAND}
+    -DINPUT=${LAB_CATALOG_JSON}
+    -DOUTPUT=${GENERATED_LAB_CATALOG}
+    -P ${LAB_CATALOG_GENERATOR}
+  RESULT_VARIABLE LAB_CATALOG_RESULT
+)
+if(NOT LAB_CATALOG_RESULT EQUAL 0)
+  message(FATAL_ERROR "Could not generate the lab catalog")
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  ${LAB_CATALOG_JSON}
+  ${LAB_CATALOG_GENERATOR}
 )
 
 if(MACHINE_LAB_WITH_SDL)
@@ -180,6 +206,13 @@ set_target_properties(unit_tests PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
 )
 
+add_executable(client_protocol_tests tests/client_protocol_tests.c)
+target_link_libraries(client_protocol_tests PRIVATE machinelab_c)
+target_compile_options(client_protocol_tests PRIVATE -Wall -Wextra -Wpedantic)
+set_target_properties(client_protocol_tests PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
+)
+
 function(add_lab_solution_test lab)
   add_executable(${lab}_solution_test
     dev/lab-tests/${lab}_test.c
@@ -223,6 +256,7 @@ if(BUILD_TESTING)
   file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/test-output)
 
   add_test(NAME unit COMMAND unit_tests)
+  add_test(NAME client_protocol COMMAND client_protocol_tests)
   add_test(NAME lab1_solution
     COMMAND $<TARGET_FILE:machinelab> run --headless --rtc 2026-06-16T12:34:56 -- $<TARGET_FILE:lab1_solution_test>
   )

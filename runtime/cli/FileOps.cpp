@@ -43,7 +43,7 @@ bool copyTreeIfExists(const std::filesystem::path &from,
   return true;
 }
 
-void makeExecutable(const std::filesystem::path &path) {
+bool makeExecutable(const std::filesystem::path &path, std::string &error) {
   std::error_code ec;
   std::filesystem::permissions(path,
                                std::filesystem::perms::owner_exec |
@@ -51,6 +51,11 @@ void makeExecutable(const std::filesystem::path &path) {
                                    std::filesystem::perms::others_exec,
                                std::filesystem::perm_options::add,
                                ec);
+  if (ec) {
+    error = "could not make " + path.string() + " executable: " + ec.message();
+    return false;
+  }
+  return true;
 }
 
 std::string shellQuote(const std::filesystem::path &path) {
@@ -85,6 +90,11 @@ bool writeTextFile(const std::filesystem::path &path,
     return false;
   }
   out << text;
+  out.flush();
+  if (!out) {
+    error = "could not write " + path.string();
+    return false;
+  }
   return true;
 }
 

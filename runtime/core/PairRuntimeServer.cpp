@@ -1,4 +1,5 @@
 #include "PairRuntimeServer.hpp"
+#include "ProtocolIO.hpp"
 
 #include "lcom_protocol.h"
 #include "../backends/HeadlessDisplay.hpp"
@@ -37,48 +38,6 @@ static constexpr size_t kAudioShmOffset = kFramebufferShmBytes;
 static constexpr int kMaxRealtimeTicksPerLoop = 4;
 static constexpr auto kDisplayPumpInterval = std::chrono::nanoseconds(1000000000ull / 120ull);
 
-int writeAll(int fd, const void *buf, size_t len) {
-  const uint8_t *p = static_cast<const uint8_t *>(buf);
-  while (len > 0) {
-    ssize_t n = write(fd, p, len);
-    if (n < 0) {
-      if (errno == EINTR) continue;
-      return -1;
-    }
-    if (n == 0) return -1;
-    p += static_cast<size_t>(n);
-    len -= static_cast<size_t>(n);
-  }
-  return 0;
-}
-
-int readAll(int fd, void *buf, size_t len) {
-  uint8_t *p = static_cast<uint8_t *>(buf);
-  while (len > 0) {
-    ssize_t n = read(fd, p, len);
-    if (n < 0) {
-      if (errno == EINTR) continue;
-      return -1;
-    }
-    if (n == 0) return -1;
-    p += static_cast<size_t>(n);
-    len -= static_cast<size_t>(n);
-  }
-  return 0;
-}
-
-bool sendMessage(int fd, uint16_t type, uint32_t request_id,
-                 const void *payload, uint32_t size) {
-  lcom_msg_header_t hdr{};
-  hdr.type = type;
-  hdr.flags = 0;
-  hdr.size = size;
-  hdr.request_id = request_id;
-  if (writeAll(fd, &hdr, sizeof(hdr)) != 0) return false;
-  if (size != 0 && writeAll(fd, payload, size) != 0) return false;
-  return true;
-}
-
 void setNonBlocking(int fd) {
   int flags = fcntl(fd, F_GETFL, 0);
   if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
@@ -103,6 +62,7 @@ PairRuntimeServer::~PairRuntimeServer() {
 
 int PairRuntimeServer::run() {
   if (!setup()) return 1;
+  int runtime_status = 0;
 
   std::cout << "Starting paired Machine Lab bus instances...\n"
             << "  left  COM1/COM2 bridged to right COM1/COM2\n"
@@ -202,6 +162,7 @@ int PairRuntimeServer::run() {
     int ready = max_fd >= 0 ? select(max_fd + 1, &readfds, nullptr, nullptr, &tv) : 0;
     if (ready < 0 && errno != EINTR) {
       perror("select");
+      runtime_status = 1;
       break;
     }
 
@@ -234,7 +195,9 @@ int PairRuntimeServer::run() {
     }
   }
 
-  return 0;
+  if (runtime_status != 0) return runtime_status;
+  if (left_.exit_status != 0) return left_.exit_status;
+  return right_.exit_status;
 }
 
 bool PairRuntimeServer::setup() {
@@ -398,17 +361,19 @@ void PairRuntimeServer::cleanupSlot(Slot &slot) {
 
 bool PairRuntimeServer::handleClientMessage(Slot &slot) {
   lcom_msg_header_t hdr{};
-  if (readAll(slot.client_fd, &hdr, sizeof(hdr)) != 0) return false;
+  if (!protocol::readAll(slot.client_fd, &hdr, sizeof(hdr))) return false;
   if (hdr.size > LCOM_MAX_PAYLOAD) return false;
   uint8_t payload[LCOM_MAX_PAYLOAD];
-  if (hdr.size != 0 && readAll(slot.client_fd, payload, hdr.size) != 0) return false;
+  if (hdr.size != 0 && !protocol::readAll(slot.client_fd, payload, hdr.size)) return false;
 
   switch (hdr.type) {
   case LCOM_MSG_HELLO: {
+    lcom_hello_t request{};
+    if (!protocol::decodePayload(payload, hdr.size, request)) return false;
     lcom_hello_reply_t reply{};
-    reply.status = 0;
+    reply.status = request.version == LCOM_PROTOCOL_VERSION ? 0 : -1;
     reply.version = LCOM_PROTOCOL_VERSION;
-    sendMessage(slot.client_fd, LCOM_MSG_HELLO_REPLY, hdr.request_id, &reply, sizeof(reply));
+    protocol::sendMessage(slot.client_fd, LCOM_MSG_HELLO_REPLY, hdr.request_id, &reply, sizeof(reply));
     return true;
   }
   case LCOM_MSG_EXIT:
@@ -427,40 +392,44 @@ bool PairRuntimeServer::handleClientMessage(Slot &slot) {
     return true;
   case LCOM_MSG_PORT_READ8: {
     if (hdr.size != sizeof(lcom_port_read8_t)) return false;
-    auto *req = reinterpret_cast<lcom_port_read8_t *>(payload);
+    lcom_port_read8_t req{};
+    if (!protocol::decodePayload(payload, hdr.size, req)) return false;
     uint8_t value = 0;
-    bool ok = slot.machine.readPort8(req->port, value);
+    bool ok = slot.machine.readPort8(req.port, value);
     lcom_port_read8_reply_t reply{};
     reply.status = ok ? 0 : -1;
     reply.value = value;
-    sendMessage(slot.client_fd, LCOM_MSG_PORT_READ8_REPLY, hdr.request_id, &reply, sizeof(reply));
+    protocol::sendMessage(slot.client_fd, LCOM_MSG_PORT_READ8_REPLY, hdr.request_id, &reply, sizeof(reply));
     return true;
   }
   case LCOM_MSG_PORT_WRITE8: {
     if (hdr.size != sizeof(lcom_port_write8_t)) return false;
-    auto *req = reinterpret_cast<lcom_port_write8_t *>(payload);
-    sendStatus(slot, hdr.request_id, slot.machine.writePort8(req->port, req->value) ? 0 : -1);
+    lcom_port_write8_t req{};
+    if (!protocol::decodePayload(payload, hdr.size, req)) return false;
+    sendStatus(slot, hdr.request_id, slot.machine.writePort8(req.port, req.value) ? 0 : -1);
     maybeSatisfyEventWait(left_);
     maybeSatisfyEventWait(right_);
     return true;
   }
   case LCOM_MSG_IRQ_SUBSCRIBE: {
     if (hdr.size != sizeof(lcom_irq_subscribe_t)) return false;
-    auto *req = reinterpret_cast<lcom_irq_subscribe_t *>(payload);
+    lcom_irq_subscribe_t req{};
+    if (!protocol::decodePayload(payload, hdr.size, req)) return false;
     IrqSubscription sub;
-    bool ok = slot.machine.subscribeIrq(req->irq, sub);
+    bool ok = slot.machine.subscribeIrq(req.irq, sub);
     lcom_irq_subscribe_reply_t reply{};
     reply.status = ok ? 0 : -1;
     reply.irq = sub.irq;
     reply.bit_no = sub.bit_no;
     reply.mask = sub.mask;
-    sendMessage(slot.client_fd, LCOM_MSG_IRQ_SUBSCRIBE_REPLY, hdr.request_id, &reply, sizeof(reply));
+    protocol::sendMessage(slot.client_fd, LCOM_MSG_IRQ_SUBSCRIBE_REPLY, hdr.request_id, &reply, sizeof(reply));
     return true;
   }
   case LCOM_MSG_IRQ_UNSUBSCRIBE: {
     if (hdr.size != sizeof(lcom_irq_unsubscribe_t)) return false;
-    auto *req = reinterpret_cast<lcom_irq_unsubscribe_t *>(payload);
-    sendStatus(slot, hdr.request_id, slot.machine.unsubscribeIrq(req->irq) ? 0 : -1);
+    lcom_irq_unsubscribe_t req{};
+    if (!protocol::decodePayload(payload, hdr.size, req)) return false;
+    sendStatus(slot, hdr.request_id, slot.machine.unsubscribeIrq(req.irq) ? 0 : -1);
     return true;
   }
   case LCOM_MSG_EVENT_WAIT:
@@ -470,31 +439,33 @@ bool PairRuntimeServer::handleClientMessage(Slot &slot) {
     return true;
   case LCOM_MSG_PHYS_MAP: {
     if (hdr.size != sizeof(lcom_phys_map_t)) return false;
-    auto *req = reinterpret_cast<lcom_phys_map_t *>(payload);
+    lcom_phys_map_t req{};
+    if (!protocol::decodePayload(payload, hdr.size, req)) return false;
     lcom_phys_map_reply_t reply{};
-    if (slot.machine.vbe().ownsRange(req->phys, req->length) &&
-        req->length <= kFramebufferShmBytes) {
+    if (slot.machine.vbe().ownsRange(req.phys, req.length) &&
+        req.length <= kFramebufferShmBytes) {
       reply.status = 0;
       std::snprintf(reply.shm_name, sizeof(reply.shm_name), "%s", slot.shm_name.c_str());
-      reply.offset = req->phys - slot.machine.vbe().framebufferPhys();
-      reply.length = req->length;
-    } else if (slot.machine.ac97().ownsRange(req->phys, req->length) &&
-               kAudioShmOffset + req->length <= slot.shm_size) {
+      reply.offset = req.phys - slot.machine.vbe().framebufferPhys();
+      reply.length = req.length;
+    } else if (slot.machine.ac97().ownsRange(req.phys, req.length) &&
+               req.length <= slot.shm_size - kAudioShmOffset) {
       reply.status = 0;
       std::snprintf(reply.shm_name, sizeof(reply.shm_name), "%s", slot.shm_name.c_str());
-      reply.offset = kAudioShmOffset + (req->phys - slot.machine.ac97().bufferPhys());
-      reply.length = req->length;
+      reply.offset = kAudioShmOffset + (req.phys - slot.machine.ac97().bufferPhys());
+      reply.length = req.length;
     } else {
       reply.status = -1;
     }
-    sendMessage(slot.client_fd, LCOM_MSG_PHYS_MAP_REPLY, hdr.request_id, &reply, sizeof(reply));
+    protocol::sendMessage(slot.client_fd, LCOM_MSG_PHYS_MAP_REPLY, hdr.request_id, &reply, sizeof(reply));
     return true;
   }
   case LCOM_MSG_VBE_GET_MODE_INFO: {
     if (hdr.size != sizeof(lcom_vbe_mode_request_t)) return false;
-    auto *req = reinterpret_cast<lcom_vbe_mode_request_t *>(payload);
+    lcom_vbe_mode_request_t req{};
+    if (!protocol::decodePayload(payload, hdr.size, req)) return false;
     VbeModeInfo info;
-    bool ok = slot.machine.vbe().modeInfo(req->mode, info);
+    bool ok = slot.machine.vbe().modeInfo(req.mode, info);
     lcom_vbe_mode_info_wire_t reply{};
     reply.status = ok ? 0 : -1;
     reply.mode = info.mode;
@@ -505,13 +476,14 @@ bool PairRuntimeServer::handleClientMessage(Slot &slot) {
     reply.pitch = info.pitch;
     reply.framebuffer_phys = info.framebuffer_phys;
     reply.framebuffer_size = info.framebuffer_size;
-    sendMessage(slot.client_fd, LCOM_MSG_VBE_MODE_INFO_REPLY, hdr.request_id, &reply, sizeof(reply));
+    protocol::sendMessage(slot.client_fd, LCOM_MSG_VBE_MODE_INFO_REPLY, hdr.request_id, &reply, sizeof(reply));
     return true;
   }
   case LCOM_MSG_VBE_SET_MODE: {
     if (hdr.size != sizeof(lcom_vbe_mode_request_t)) return false;
-    auto *req = reinterpret_cast<lcom_vbe_mode_request_t *>(payload);
-    bool ok = slot.machine.vbe().setMode(req->mode);
+    lcom_vbe_mode_request_t req{};
+    if (!protocol::decodePayload(payload, hdr.size, req)) return false;
+    bool ok = slot.machine.vbe().setMode(req.mode);
     zeroSharedMemory(slot);
     sendStatus(slot, hdr.request_id, ok ? 0 : -1);
     return true;
@@ -529,7 +501,7 @@ bool PairRuntimeServer::handleClientMessage(Slot &slot) {
     reply.sample_rate = slot.machine.ac97().sampleRate();
     reply.channels = slot.machine.ac97().channels();
     reply.bits_per_sample = 16;
-    sendMessage(slot.client_fd, LCOM_MSG_AC97_BUFFER_REPLY, hdr.request_id, &reply, sizeof(reply));
+    protocol::sendMessage(slot.client_fd, LCOM_MSG_AC97_BUFFER_REPLY, hdr.request_id, &reply, sizeof(reply));
     return true;
   }
   default:
@@ -540,7 +512,7 @@ bool PairRuntimeServer::handleClientMessage(Slot &slot) {
 void PairRuntimeServer::sendStatus(Slot &slot, uint32_t request_id, int32_t status) {
   lcom_status_reply_t reply{};
   reply.status = status;
-  sendMessage(slot.client_fd, LCOM_MSG_STATUS, request_id, &reply, sizeof(reply));
+  protocol::sendMessage(slot.client_fd, LCOM_MSG_STATUS, request_id, &reply, sizeof(reply));
 }
 
 void PairRuntimeServer::sendEventReply(Slot &slot, uint32_t request_id, uint32_t irq_mask) {
@@ -548,7 +520,7 @@ void PairRuntimeServer::sendEventReply(Slot &slot, uint32_t request_id, uint32_t
   reply.status = 0;
   reply.irq_mask = irq_mask;
   reply.tick = slot.machine.tick();
-  sendMessage(slot.client_fd, LCOM_MSG_EVENT_REPLY, request_id, &reply, sizeof(reply));
+  protocol::sendMessage(slot.client_fd, LCOM_MSG_EVENT_REPLY, request_id, &reply, sizeof(reply));
 }
 
 void PairRuntimeServer::maybeSatisfyEventWait(Slot &slot) {
@@ -564,6 +536,8 @@ void PairRuntimeServer::maybeSatisfyEventWait(Slot &slot) {
 void PairRuntimeServer::advanceAllOnce() {
   if (left_.machine.tick() >= options_.max_ticks || right_.machine.tick() >= options_.max_ticks) {
     std::cerr << "machinelab: run-pair max virtual ticks reached (" << options_.max_ticks << ")\n";
+    left_.exit_status = 1;
+    right_.exit_status = 1;
     cleanupSlot(left_);
     cleanupSlot(right_);
     return;
@@ -583,10 +557,12 @@ void PairRuntimeServer::applyScriptEvents(Slot &slot, const std::vector<ScriptEv
     case ScriptEvent::Kind::Mouse:
       slot.machine.injectMouse(ev.dx, ev.dy, ev.buttons);
       break;
+    case ScriptEvent::Kind::Text:
+      injectText(slot.machine, ev.text);
+      break;
     case ScriptEvent::Kind::Rtc:
       slot.machine.rtc().setIsoTime(ev.text);
       break;
-    case ScriptEvent::Kind::Text:
     case ScriptEvent::Kind::Tick:
     case ScriptEvent::Kind::Caption:
     case ScriptEvent::Kind::Capture:
@@ -647,11 +623,15 @@ bool PairRuntimeServer::childExited(Slot &slot) {
     slot.child_running = false;
     slot.child_pid = -1;
     if (WIFEXITED(status)) {
+      slot.exit_status = WEXITSTATUS(status);
       std::cout << "[" << slot.name << "] Program exited with status "
                 << WEXITSTATUS(status) << "\n";
     } else if (WIFSIGNALED(status)) {
+      slot.exit_status = 128 + WTERMSIG(status);
       std::cout << "[" << slot.name << "] Program terminated by signal "
                 << WTERMSIG(status) << "\n";
+    } else {
+      slot.exit_status = 1;
     }
     if (slot.client_fd >= 0) {
       close(slot.client_fd);
@@ -668,8 +648,11 @@ bool PairRuntimeServer::anyAlive() const {
 }
 
 bool PairRuntimeServer::shouldAdvanceHeadless() const {
-  return (left_.waiting_event || right_.waiting_event) &&
-         (left_.child_running || right_.child_running);
+  const auto ready = [](const Slot &slot) {
+    return !slot.child_running || slot.waiting_event;
+  };
+  return (left_.child_running || right_.child_running) &&
+         ready(left_) && ready(right_);
 }
 
 } // namespace lcom

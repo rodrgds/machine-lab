@@ -1,4 +1,5 @@
 #include "RuntimeServer.hpp"
+#include "ProtocolIO.hpp"
 
 #include "lcom_protocol.h"
 #include "../backends/HeadlessDisplay.hpp"
@@ -35,48 +36,6 @@ static constexpr size_t kFramebufferShmBytes = 1280u * 1024u * 4u;
 static constexpr size_t kAudioShmOffset = kFramebufferShmBytes;
 static constexpr int kMaxRealtimeTicksPerLoop = 4;
 static constexpr auto kDisplayPumpInterval = std::chrono::nanoseconds(1000000000ull / 120ull);
-
-static int writeAll(int fd, const void *buf, size_t len) {
-  const uint8_t *p = static_cast<const uint8_t *>(buf);
-  while (len > 0) {
-    ssize_t n = write(fd, p, len);
-    if (n < 0) {
-      if (errno == EINTR) continue;
-      return -1;
-    }
-    if (n == 0) return -1;
-    p += static_cast<size_t>(n);
-    len -= static_cast<size_t>(n);
-  }
-  return 0;
-}
-
-static int readAll(int fd, void *buf, size_t len) {
-  uint8_t *p = static_cast<uint8_t *>(buf);
-  while (len > 0) {
-    ssize_t n = read(fd, p, len);
-    if (n < 0) {
-      if (errno == EINTR) continue;
-      return -1;
-    }
-    if (n == 0) return -1;
-    p += static_cast<size_t>(n);
-    len -= static_cast<size_t>(n);
-  }
-  return 0;
-}
-
-static bool sendMessage(int fd, uint16_t type, uint32_t request_id,
-                        const void *payload, uint32_t size) {
-  lcom_msg_header_t hdr{};
-  hdr.type = type;
-  hdr.flags = 0;
-  hdr.size = size;
-  hdr.request_id = request_id;
-  if (writeAll(fd, &hdr, sizeof(hdr)) != 0) return false;
-  if (size != 0 && writeAll(fd, payload, size) != 0) return false;
-  return true;
-}
 
 static void setNonBlocking(int fd) {
   int flags = fcntl(fd, F_GETFL, 0);
@@ -201,10 +160,15 @@ int RuntimeServer::run() {
 
   if (!options_.dump_frame_path.empty()) {
     syncFramebufferFromSharedMemory();
-    machine_.vbe().dumpPpm(options_.dump_frame_path, caption_text_, caption_position_);
+    if (!machine_.vbe().dumpPpm(options_.dump_frame_path,
+                                caption_text_, caption_position_)) {
+      std::cerr << "machinelab: could not write frame dump "
+                << options_.dump_frame_path << "\n";
+      return 1;
+    }
   }
 
-  return renderVideo() ? child_exit_status_ : 1;
+  return !artifact_failed_ && renderVideo() ? child_exit_status_ : 1;
 }
 
 bool RuntimeServer::setup() {
@@ -432,18 +396,20 @@ void RuntimeServer::cleanupSharedMemory() {
 
 bool RuntimeServer::handleClientMessage() {
   lcom_msg_header_t hdr{};
-  if (readAll(client_fd_, &hdr, sizeof(hdr)) != 0) return false;
+  if (!protocol::readAll(client_fd_, &hdr, sizeof(hdr))) return false;
   if (hdr.size > LCOM_MAX_PAYLOAD) return false;
 
   uint8_t payload[LCOM_MAX_PAYLOAD];
-  if (hdr.size != 0 && readAll(client_fd_, payload, hdr.size) != 0) return false;
+  if (hdr.size != 0 && !protocol::readAll(client_fd_, payload, hdr.size)) return false;
 
   switch (hdr.type) {
   case LCOM_MSG_HELLO: {
+    lcom_hello_t request{};
+    if (!protocol::decodePayload(payload, hdr.size, request)) return false;
     lcom_hello_reply_t reply{};
-    reply.status = 0;
+    reply.status = request.version == LCOM_PROTOCOL_VERSION ? 0 : -1;
     reply.version = LCOM_PROTOCOL_VERSION;
-    sendMessage(client_fd_, LCOM_MSG_HELLO_REPLY, hdr.request_id, &reply, sizeof(reply));
+    protocol::sendMessage(client_fd_, LCOM_MSG_HELLO_REPLY, hdr.request_id, &reply, sizeof(reply));
     return true;
   }
   case LCOM_MSG_EXIT:
@@ -453,43 +419,47 @@ bool RuntimeServer::handleClientMessage() {
     return true;
   case LCOM_MSG_PORT_READ8: {
     if (hdr.size != sizeof(lcom_port_read8_t)) return false;
-    auto *req = reinterpret_cast<lcom_port_read8_t *>(payload);
+    lcom_port_read8_t req{};
+    if (!protocol::decodePayload(payload, hdr.size, req)) return false;
     uint8_t value = 0;
-    bool ok = machine_.readPort8(req->port, value);
+    bool ok = machine_.readPort8(req.port, value);
     lcom_port_read8_reply_t reply{};
     reply.status = ok ? 0 : -1;
     reply.value = value;
-    sendMessage(client_fd_, LCOM_MSG_PORT_READ8_REPLY, hdr.request_id, &reply, sizeof(reply));
+    protocol::sendMessage(client_fd_, LCOM_MSG_PORT_READ8_REPLY, hdr.request_id, &reply, sizeof(reply));
     return true;
   }
   case LCOM_MSG_PORT_WRITE8: {
     if (hdr.size != sizeof(lcom_port_write8_t)) return false;
-    auto *req = reinterpret_cast<lcom_port_write8_t *>(payload);
+    lcom_port_write8_t req{};
+    if (!protocol::decodePayload(payload, hdr.size, req)) return false;
     bool was_audio_playing = machine_.ac97().playing();
-    bool force_audio_play = req->port == AC97_BM_BASE + AC97_PO_CR &&
-                            (req->value & AC97_PO_CR_RUN) != 0;
-    bool ok = machine_.writePort8(req->port, req->value);
+    bool force_audio_play = req.port == AC97_BM_BASE + AC97_PO_CR &&
+                            (req.value & AC97_PO_CR_RUN) != 0;
+    bool ok = machine_.writePort8(req.port, req.value);
     if (ok) ok = updateAudioBackendFromDevice(was_audio_playing, force_audio_play);
     sendStatus(hdr.request_id, ok ? 0 : -1);
     return true;
   }
   case LCOM_MSG_IRQ_SUBSCRIBE: {
     if (hdr.size != sizeof(lcom_irq_subscribe_t)) return false;
-    auto *req = reinterpret_cast<lcom_irq_subscribe_t *>(payload);
+    lcom_irq_subscribe_t req{};
+    if (!protocol::decodePayload(payload, hdr.size, req)) return false;
     IrqSubscription sub;
-    bool ok = machine_.subscribeIrq(req->irq, sub);
+    bool ok = machine_.subscribeIrq(req.irq, sub);
     lcom_irq_subscribe_reply_t reply{};
     reply.status = ok ? 0 : -1;
     reply.irq = sub.irq;
     reply.bit_no = sub.bit_no;
     reply.mask = sub.mask;
-    sendMessage(client_fd_, LCOM_MSG_IRQ_SUBSCRIBE_REPLY, hdr.request_id, &reply, sizeof(reply));
+    protocol::sendMessage(client_fd_, LCOM_MSG_IRQ_SUBSCRIBE_REPLY, hdr.request_id, &reply, sizeof(reply));
     return true;
   }
   case LCOM_MSG_IRQ_UNSUBSCRIBE: {
     if (hdr.size != sizeof(lcom_irq_unsubscribe_t)) return false;
-    auto *req = reinterpret_cast<lcom_irq_unsubscribe_t *>(payload);
-    sendStatus(hdr.request_id, machine_.unsubscribeIrq(req->irq) ? 0 : -1);
+    lcom_irq_unsubscribe_t req{};
+    if (!protocol::decodePayload(payload, hdr.size, req)) return false;
+    sendStatus(hdr.request_id, machine_.unsubscribeIrq(req.irq) ? 0 : -1);
     return true;
   }
   case LCOM_MSG_EVENT_WAIT:
@@ -499,30 +469,32 @@ bool RuntimeServer::handleClientMessage() {
     return true;
   case LCOM_MSG_PHYS_MAP: {
     if (hdr.size != sizeof(lcom_phys_map_t)) return false;
-    auto *req = reinterpret_cast<lcom_phys_map_t *>(payload);
+    lcom_phys_map_t req{};
+    if (!protocol::decodePayload(payload, hdr.size, req)) return false;
     lcom_phys_map_reply_t reply{};
-    if (machine_.vbe().ownsRange(req->phys, req->length) && req->length <= kFramebufferShmBytes) {
+    if (machine_.vbe().ownsRange(req.phys, req.length) && req.length <= kFramebufferShmBytes) {
       reply.status = 0;
       std::snprintf(reply.shm_name, sizeof(reply.shm_name), "%s", shm_name_.c_str());
-      reply.offset = req->phys - machine_.vbe().framebufferPhys();
-      reply.length = req->length;
-    } else if (machine_.ac97().ownsRange(req->phys, req->length) &&
-               kAudioShmOffset + req->length <= shm_size_) {
+      reply.offset = req.phys - machine_.vbe().framebufferPhys();
+      reply.length = req.length;
+    } else if (machine_.ac97().ownsRange(req.phys, req.length) &&
+               req.length <= shm_size_ - kAudioShmOffset) {
       reply.status = 0;
       std::snprintf(reply.shm_name, sizeof(reply.shm_name), "%s", shm_name_.c_str());
-      reply.offset = kAudioShmOffset + (req->phys - machine_.ac97().bufferPhys());
-      reply.length = req->length;
+      reply.offset = kAudioShmOffset + (req.phys - machine_.ac97().bufferPhys());
+      reply.length = req.length;
     } else {
       reply.status = -1;
     }
-    sendMessage(client_fd_, LCOM_MSG_PHYS_MAP_REPLY, hdr.request_id, &reply, sizeof(reply));
+    protocol::sendMessage(client_fd_, LCOM_MSG_PHYS_MAP_REPLY, hdr.request_id, &reply, sizeof(reply));
     return true;
   }
   case LCOM_MSG_VBE_GET_MODE_INFO: {
     if (hdr.size != sizeof(lcom_vbe_mode_request_t)) return false;
-    auto *req = reinterpret_cast<lcom_vbe_mode_request_t *>(payload);
+    lcom_vbe_mode_request_t req{};
+    if (!protocol::decodePayload(payload, hdr.size, req)) return false;
     VbeModeInfo info;
-    bool ok = machine_.vbe().modeInfo(req->mode, info);
+    bool ok = machine_.vbe().modeInfo(req.mode, info);
     lcom_vbe_mode_info_wire_t reply{};
     reply.status = ok ? 0 : -1;
     reply.mode = info.mode;
@@ -533,13 +505,14 @@ bool RuntimeServer::handleClientMessage() {
     reply.pitch = info.pitch;
     reply.framebuffer_phys = info.framebuffer_phys;
     reply.framebuffer_size = info.framebuffer_size;
-    sendMessage(client_fd_, LCOM_MSG_VBE_MODE_INFO_REPLY, hdr.request_id, &reply, sizeof(reply));
+    protocol::sendMessage(client_fd_, LCOM_MSG_VBE_MODE_INFO_REPLY, hdr.request_id, &reply, sizeof(reply));
     return true;
   }
   case LCOM_MSG_VBE_SET_MODE: {
     if (hdr.size != sizeof(lcom_vbe_mode_request_t)) return false;
-    auto *req = reinterpret_cast<lcom_vbe_mode_request_t *>(payload);
-    bool ok = machine_.vbe().setMode(req->mode);
+    lcom_vbe_mode_request_t req{};
+    if (!protocol::decodePayload(payload, hdr.size, req)) return false;
+    bool ok = machine_.vbe().setMode(req.mode);
     zeroSharedFramebuffer();
     sendStatus(hdr.request_id, ok ? 0 : -1);
     return true;
@@ -547,9 +520,20 @@ bool RuntimeServer::handleClientMessage() {
   case LCOM_MSG_VBE_PRESENT:
     syncFramebufferFromSharedMemory();
     if (!options_.dump_frame_path.empty()) {
-      machine_.vbe().dumpPpm(options_.dump_frame_path, caption_text_, caption_position_);
+      if (!machine_.vbe().dumpPpm(options_.dump_frame_path,
+                                  caption_text_, caption_position_)) {
+        std::cerr << "machinelab: could not write frame dump "
+                  << options_.dump_frame_path << "\n";
+        artifact_failed_ = true;
+        sendStatus(hdr.request_id, -1);
+        return true;
+      }
     }
-    dumpVideoFrame();
+    if (!dumpVideoFrame()) {
+      artifact_failed_ = true;
+      sendStatus(hdr.request_id, -1);
+      return true;
+    }
     if (display_ != nullptr) display_->present(machine_);
     sendStatus(hdr.request_id, 0);
     return true;
@@ -561,7 +545,7 @@ bool RuntimeServer::handleClientMessage() {
     reply.sample_rate = machine_.ac97().sampleRate();
     reply.channels = machine_.ac97().channels();
     reply.bits_per_sample = 16;
-    sendMessage(client_fd_, LCOM_MSG_AC97_BUFFER_REPLY, hdr.request_id, &reply, sizeof(reply));
+    protocol::sendMessage(client_fd_, LCOM_MSG_AC97_BUFFER_REPLY, hdr.request_id, &reply, sizeof(reply));
     return true;
   }
   default:
@@ -604,7 +588,7 @@ void RuntimeServer::handleConsoleWrite(const char *data, size_t size) {
 void RuntimeServer::sendStatus(uint32_t request_id, int32_t status) {
   lcom_status_reply_t reply{};
   reply.status = status;
-  sendMessage(client_fd_, LCOM_MSG_STATUS, request_id, &reply, sizeof(reply));
+  protocol::sendMessage(client_fd_, LCOM_MSG_STATUS, request_id, &reply, sizeof(reply));
 }
 
 void RuntimeServer::sendEventReply(uint32_t request_id, uint32_t irq_mask) {
@@ -612,7 +596,7 @@ void RuntimeServer::sendEventReply(uint32_t request_id, uint32_t irq_mask) {
   reply.status = 0;
   reply.irq_mask = irq_mask;
   reply.tick = machine_.tick();
-  sendMessage(client_fd_, LCOM_MSG_EVENT_REPLY, request_id, &reply, sizeof(reply));
+  protocol::sendMessage(client_fd_, LCOM_MSG_EVENT_REPLY, request_id, &reply, sizeof(reply));
 }
 
 void RuntimeServer::maybeSatisfyEventWait() {
@@ -646,20 +630,7 @@ void RuntimeServer::applyScriptEvents(const std::vector<ScriptEvent> &events) {
       machine_.injectMouse(ev.dx, ev.dy, ev.buttons);
       break;
     case ScriptEvent::Kind::Text:
-      for (char c : ev.text) {
-        if (c >= 'a' && c <= 'z') {
-          std::string key(1, static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
-          machine_.injectKey(key, true);
-          machine_.injectKey(key, false);
-        } else if (c >= 'A' && c <= 'Z') {
-          std::string key(1, c);
-          machine_.injectKey(key, true);
-          machine_.injectKey(key, false);
-        } else if (c == ' ') {
-          machine_.injectKey("SPACE", true);
-          machine_.injectKey("SPACE", false);
-        }
-      }
+      injectText(machine_, ev.text);
       break;
     case ScriptEvent::Kind::Rtc:
       machine_.rtc().setIsoTime(ev.text);
@@ -752,12 +723,12 @@ bool RuntimeServer::setupVideoCapture() {
   return true;
 }
 
-void RuntimeServer::dumpVideoFrame() {
-  if (active_frame_dir_.empty() || !video_capture_enabled_) return;
+bool RuntimeServer::dumpVideoFrame() {
+  if (active_frame_dir_.empty() || !video_capture_enabled_) return true;
   presented_frame_index_++;
   if (capture_frame_stride_ > 1 &&
       ((presented_frame_index_ - 1) % capture_frame_stride_) != 0) {
-    return;
+    return true;
   }
   if (caption_until_tick_ != 0 && machine_.tick() >= caption_until_tick_) {
     caption_text_.clear();
@@ -767,7 +738,11 @@ void RuntimeServer::dumpVideoFrame() {
   char filename[64];
   std::snprintf(filename, sizeof(filename), "frame_%06u.ppm", frame_index_);
   std::filesystem::path path = std::filesystem::path(active_frame_dir_) / filename;
-  machine_.vbe().dumpPpm(path.string(), caption_text_, caption_position_);
+  if (!machine_.vbe().dumpPpm(path.string(), caption_text_, caption_position_)) {
+    std::cerr << "machinelab: could not write video frame " << path.string() << "\n";
+    return false;
+  }
+  return true;
 }
 
 bool RuntimeServer::renderVideo() {

@@ -1,6 +1,8 @@
 #include "../runtime/core/Machine.hpp"
 #include "../runtime/core/MousePacketScheduler.hpp"
 #include "../runtime/core/Script.hpp"
+#include "../runtime/core/ProtocolIO.hpp"
+#include "../runtime/backends/AudioBackend.hpp"
 
 #include <lcom/i8042.h>
 #include <lcom/i8254.h>
@@ -10,9 +12,12 @@
 #include <lcom/vbe.h>
 
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <string>
+#include <vector>
 
 static int g_failures = 0;
 
@@ -225,8 +230,58 @@ static void test_vbe_mode_and_framebuffer() {
   CHECK(info.bytes_per_pixel == 3);
   CHECK(machine.vbe().setMode(LCOM_VBE_MODE_800_600_24));
   CHECK(machine.vbe().ownsRange(info.framebuffer_phys, info.framebuffer_size));
+  CHECK(!machine.vbe().ownsRange(std::numeric_limits<uint64_t>::max(), 2));
+  CHECK(!machine.vbe().ownsRange(info.framebuffer_phys, std::numeric_limits<uint64_t>::max()));
   machine.vbe().framebuffer()[0] = 0xAA;
   CHECK(machine.vbe().framebuffer()[0] == 0xAA);
+}
+
+static uint32_t read_u32_le(const std::vector<uint8_t> &bytes, size_t offset) {
+  return static_cast<uint32_t>(bytes[offset]) |
+         (static_cast<uint32_t>(bytes[offset + 1]) << 8) |
+         (static_cast<uint32_t>(bytes[offset + 2]) << 16) |
+         (static_cast<uint32_t>(bytes[offset + 3]) << 24);
+}
+
+static void test_wav_backend_streams_multiple_blocks() {
+  const char *path = "/tmp/machine-lab-streaming-audio.wav";
+  std::remove(path);
+  const int16_t first[] = {1, -1, 2, -2};
+  const int16_t second[] = {3, -3};
+  std::string error;
+  {
+    lcom::WavAudioBackend wav(path);
+    CHECK(wav.playPcm16(first, 2, 48000, 2, error));
+    wav.stop();
+    CHECK(wav.playPcm16(second, 1, 48000, 2, error));
+  }
+
+  std::ifstream input(path, std::ios::binary);
+  std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(input)),
+                             std::istreambuf_iterator<char>());
+  CHECK(bytes.size() == 44 + sizeof(first) + sizeof(second));
+  if (bytes.size() >= 44) {
+    CHECK(std::string(bytes.begin(), bytes.begin() + 4) == "RIFF");
+    CHECK(std::string(bytes.begin() + 8, bytes.begin() + 12) == "WAVE");
+    CHECK(read_u32_le(bytes, 4) == bytes.size() - 8);
+    CHECK(read_u32_le(bytes, 40) == bytes.size() - 44);
+  }
+
+  lcom::WavAudioBackend invalid("/missing-machine-lab-dir/audio.wav");
+  CHECK(!invalid.playPcm16(first, 2, 48000, 2, error));
+}
+
+static void test_protocol_decode_accepts_unaligned_storage() {
+  lcom_port_write8_t expected{};
+  expected.port = 0x3F8;
+  expected.value = 0x5A;
+  std::vector<uint8_t> storage(sizeof(expected) + 1);
+  std::memcpy(storage.data() + 1, &expected, sizeof(expected));
+  lcom_port_write8_t decoded{};
+  CHECK(lcom::protocol::decodePayload(storage.data() + 1, sizeof(expected), decoded));
+  CHECK(decoded.port == expected.port);
+  CHECK(decoded.value == expected.value);
+  CHECK(!lcom::protocol::decodePayload(storage.data() + 1, sizeof(expected) - 1, decoded));
 }
 
 static void test_uart_loopback_registers() {
@@ -383,6 +438,8 @@ int main() {
   test_i8042_command_byte_and_mouse_packet();
   test_rtc_cmos_bcd_registers();
   test_vbe_mode_and_framebuffer();
+  test_wav_backend_streams_multiple_blocks();
+  test_protocol_decode_accepts_unaligned_storage();
   test_uart_loopback_registers();
   test_uart_pair_virtual_cable();
   test_uart_virtual_wire_preserves_bursts();

@@ -46,7 +46,8 @@ bool Ac97::write8(uint16_t port, uint8_t value) {
 
 bool Ac97::ownsRange(uint64_t phys, uint64_t length) const {
   if (length == 0) return false;
-  return phys >= pcm_phys_ && phys + length <= pcm_phys_ + pcm_.size();
+  const uint64_t end = pcm_phys_ + pcm_.size();
+  return phys >= pcm_phys_ && phys <= end && length <= end - phys;
 }
 
 bool Ac97::play(size_t byte_count, uint32_t sample_rate, uint8_t channels) {
